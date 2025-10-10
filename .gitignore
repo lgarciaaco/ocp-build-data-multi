@@ -1,6 +1,6 @@
 # OpenShift Build Data Multi-Version Toolset .gitignore
 
-# Claude folders
+# Claude structure
 .claude
 
 # Exclude upstream checked-out content
