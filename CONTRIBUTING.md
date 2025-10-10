@@ -1,6 +1,7 @@
 # Contributing to OpenShift Build Data Multi-Version Toolset
 
-Thank you for your interest in contributing to the OpenShift Build Data Multi-Version Toolset! This project helps manage build metadata across multiple OpenShift Container Platform versions simultaneously.
+Thank you for your interest in contributing to the OpenShift Build Data Multi-Version Toolset! This project
+helps manage build metadata across multiple OpenShift Container Platform versions simultaneously.
 
 ## Table of Contents
 
@@ -27,6 +28,7 @@ make install-deps
 ```
 
 **Required Tools:**
+
 - bash 4.0+
 - git
 - yq v4.0+
@@ -37,11 +39,14 @@ make install-deps
 
 1. **Fork the repository** on GitHub
 2. **Clone your fork**:
+
    ```bash
    git clone https://github.com/your-username/ocp-build-data-multi.git
    cd ocp-build-data-multi
    ```
+
 3. **Set up your personal configuration**:
+
    ```bash
    cp config/remotes.conf.example config/remotes.conf
    # Edit config/remotes.conf with your GitHub username
@@ -50,16 +55,19 @@ make install-deps
 ## Development Setup
 
 1. **Complete the setup process**:
+
    ```bash
    make setup
    ```
 
 2. **Validate the toolset**:
+
    ```bash
    make validate
    ```
 
 3. **Initialize test worktrees** (optional, for testing):
+
    ```bash
    ./tools/ocp-setup init 4.20,4.21
    ```
@@ -80,7 +88,7 @@ We welcome several types of contributions:
 
 The project structure:
 
-```
+```text
 ocp-build-data-multi/
 ├── tools/              # Main toolset
 │   ├── lib/           # Shared libraries
@@ -118,6 +126,7 @@ ocp-build-data-multi/
 ### Before Submitting
 
 1. **Test your changes**:
+
    ```bash
    # Validate the toolset still works
    make validate
@@ -129,7 +138,8 @@ ocp-build-data-multi/
 2. **Update documentation** if needed
 
 3. **Follow commit message conventions**:
-   ```
+
+   ```text
    feat: add support for version ranges in ocp-patch
    
    - Add parsing for version ranges like 4.17..4.21
@@ -140,6 +150,7 @@ ocp-build-data-multi/
 ### Submitting a Pull Request
 
 1. **Create a feature branch**:
+
    ```bash
    git checkout -b feature/your-feature-name
    ```
@@ -147,6 +158,7 @@ ocp-build-data-multi/
 2. **Make your changes** with clear, focused commits
 
 3. **Push to your fork**:
+
    ```bash
    git push origin feature/your-feature-name
    ```
@@ -281,4 +293,5 @@ By contributing to this project, you agree that your contributions will be licen
 
 ## Thank You
 
-Your contributions help make OpenShift build data management easier for everyone. Thank you for taking the time to contribute!
+Your contributions help make OpenShift build data management easier for everyone. Thank you for taking the time
+to contribute!

@@ -1,0 +1,354 @@
+name: Security Scanning
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 6 * * 1' # Weekly on Mondays
+
+jobs:
+  codeql-analysis:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'javascript' ] # For any JSON/YAML analysis
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+
+  secret-scanning:
+    name: Secret Scanning
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run TruffleHog
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: main
+          head: HEAD
+          extra_args: --debug --only-verified
+
+      - name: Manual secret pattern check
+        run: |
+          echo "Checking for common secret patterns..."
+          
+          # Check for hardcoded credentials
+          if grep -r -i "password\|secret\|token\|key" --include="*.sh" --include="*.yml" --include="*.yaml" --include="*.md" . | grep -v "example\|template\|placeholder"; then
+            echo "❌ Potential hardcoded secrets found"
+            exit 1
+          fi
+          
+          # Check for API keys
+          if grep -r -E "(api_key|apikey|api-key)" --include="*.sh" --include="*.yml" --include="*.yaml" . | grep -v "example\|template\|your-"; then
+            echo "❌ Potential API keys found"
+            exit 1
+          fi
+          
+          # Check for GitHub tokens
+          if grep -r -E "gh[ps]_[A-Za-z0-9_]{36,}" . ; then
+            echo "❌ Potential GitHub tokens found"
+            exit 1
+          fi
+          
+          echo "✅ No obvious secrets found"
+
+  shell-security:
+    name: Shell Script Security Analysis
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup environment and security tools
+        run: |
+          make install-deps-ubuntu
+          make setup
+
+      - name: Run ShellCheck security analysis
+        run: |
+          echo "Running ShellCheck security analysis..."
+          
+          # Run ShellCheck with security-focused checks
+          find . -name "*.sh" -type f | while read -r script; do
+            echo "Analyzing $script for security issues..."
+            
+            # SC2086: Double quote to prevent globbing and word splitting
+            # SC2154: Variable is referenced but not assigned
+            # SC2155: Declare and assign separately to avoid masking return values
+            # SC2002: Useless cat
+            shellcheck -e SC2034 "$script" || {
+              echo "❌ Security issues found in $script"
+              exit 1
+            }
+          done
+          
+          echo "✅ No security issues found in shell scripts"
+
+      - name: Check for dangerous shell patterns
+        run: |
+          echo "Checking for dangerous shell patterns..."
+          
+          # Check for eval usage (potential code injection)
+          if grep -r "eval\s" --include="*.sh" . ; then
+            echo "❌ Found 'eval' usage - potential security risk"
+            exit 1
+          fi
+          
+          # Check for dangerous redirections
+          if grep -r ">\s*/dev/null\s*2>&1" --include="*.sh" . ; then
+            echo "⚠️ Found output suppression - verify this is intentional"
+          fi
+          
+          # Check for world-writable file creation
+          if grep -r "chmod.*777\|chmod.*o+w" --include="*.sh" . ; then
+            echo "❌ Found world-writable file permissions"
+            exit 1
+          fi
+          
+          # Check for potential command injection via user input
+          if grep -r '\$[0-9]\|\${[0-9]}' --include="*.sh" . | grep -v "BASH_SOURCE\|BASH_ARGV"; then
+            echo "⚠️ Found positional parameters - ensure proper validation"
+          fi
+          
+          echo "✅ No dangerous shell patterns found"
+
+  dependency-security:
+    name: Dependency Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for known vulnerable tools
+        run: |
+          echo "Checking for vulnerable dependency versions..."
+          
+          # Create a script to check versions of installed tools
+          cat > check_versions.sh << 'EOF'
+          #!/bin/bash
+          set -e
+          
+          # Setup environment
+          make install-deps-ubuntu
+          make setup
+          
+          echo "Checking installed tool versions for known vulnerabilities..."
+          
+          # Check yq version (ensure it's not vulnerable v3.x)
+          yq_version=$(yq --version | awk '{print $4}')
+          if [[ "$yq_version" =~ ^v3\. ]]; then
+            echo "❌ yq v3.x has known vulnerabilities, should use v4+"
+            exit 1
+          fi
+          
+          # Check jq version (ensure it's recent)
+          jq_version=$(jq --version | sed 's/jq-//')
+          echo "jq version: $jq_version"
+          
+          # Check gh version
+          gh_version=$(gh --version | head -n1 | awk '{print $3}')
+          echo "gh version: $gh_version"
+          
+          echo "✅ All tool versions appear secure"
+          EOF
+          
+          chmod +x check_versions.sh
+          ./check_versions.sh
+
+  infrastructure-security:
+    name: Infrastructure Security Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check file permissions
+        run: |
+          echo "Checking file permissions..."
+          
+          # Check that no files have excessive permissions
+          find . -type f -perm /o+w | grep -v ".git" && {
+            echo "❌ Found world-writable files"
+            exit 1
+          } || echo "✅ No world-writable files found"
+          
+          # Check that executables have proper permissions
+          find tools/ -type f | while read -r file; do
+            if [[ -x "$file" ]]; then
+              perms=$(stat -c %a "$file")
+              if [[ "$perms" != "755" ]]; then
+                echo "⚠️ Executable $file has permissions $perms (expected 755)"
+              fi
+            fi
+          done
+
+      - name: Check for sensitive file patterns
+        run: |
+          echo "Checking for sensitive file patterns..."
+          
+          # Check for SSH keys
+          find . -name "id_rsa*" -o -name "id_dsa*" -o -name "id_ecdsa*" -o -name "id_ed25519*" | grep -v ".git" && {
+            echo "❌ Found SSH key files"
+            exit 1
+          } || echo "✅ No SSH keys found"
+          
+          # Check for SSL certificates  
+          find . -name "*.pem" -o -name "*.crt" -o -name "*.key" | grep -v ".git" && {
+            echo "❌ Found SSL certificate/key files"
+            exit 1
+          } || echo "✅ No SSL certificates found"
+          
+          # Check for database files
+          find . -name "*.db" -o -name "*.sqlite*" | grep -v ".git" && {
+            echo "❌ Found database files"
+            exit 1
+          } || echo "✅ No database files found"
+
+  yaml-security:
+    name: YAML Security Analysis
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install YAML security scanner
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pip
+          pip3 install yamllint
+
+      - name: Scan YAML files for security issues
+        run: |
+          echo "Scanning YAML files for security issues..."
+          
+          # Run yamllint on all YAML files
+          find . -name "*.yml" -o -name "*.yaml" | grep -v ".git" | while read -r file; do
+            echo "Checking $file..."
+            yamllint "$file" || {
+              echo "❌ YAML security/syntax issues in $file"
+              exit 1
+            }
+          done
+          
+          echo "✅ All YAML files passed security checks"
+
+      - name: Check for dangerous YAML patterns
+        run: |
+          echo "Checking for dangerous YAML patterns..."
+          
+          # Check for potentially dangerous file paths
+          if grep -r "\.\./\|/etc/\|/root/\|/home/.*/.ssh" --include="*.yml" --include="*.yaml" . ; then
+            echo "❌ Found potentially dangerous file paths in YAML"
+            exit 1
+          fi
+          
+          # Check for script execution patterns
+          if grep -r "exec\|system\|eval" --include="*.yml" --include="*.yaml" . ; then
+            echo "❌ Found potentially dangerous execution patterns in YAML"
+            exit 1
+          fi
+          
+          echo "✅ No dangerous YAML patterns found"
+
+  workflow-security:
+    name: GitHub Workflow Security
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Analyze GitHub workflows for security issues
+        run: |
+          echo "Analyzing GitHub workflows for security issues..."
+          
+          # Check for potential script injection in workflows
+          find .github/workflows -name "*.yml" | while read -r workflow; do
+            echo "Checking $workflow..."
+            
+            # Check for dangerous patterns in workflows
+            if grep -q '\${{.*github\.event\..*}}' "$workflow"; then
+              echo "❌ Found potential script injection in $workflow"
+              exit 1
+            fi
+            
+            # Check for overly permissive permissions
+            if grep -q "permissions:.*write-all" "$workflow"; then
+              echo "❌ Found overly permissive permissions in $workflow"
+              exit 1
+            fi
+          done
+          
+          echo "✅ GitHub workflows passed security analysis"
+
+  supply-chain-security:
+    name: Supply Chain Security
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verify action integrity
+        run: |
+          echo "Checking GitHub Action versions and integrity..."
+          
+          # Check that all actions use specific versions (not @main or @master)
+          find .github/workflows -name "*.yml" | while read -r workflow; do
+            echo "Checking action versions in $workflow..."
+            
+            if grep -E "uses:.*@(main|master|HEAD)" "$workflow"; then
+              echo "❌ Found actions using mutable references in $workflow"
+              exit 1
+            fi
+          done
+          
+          echo "✅ All actions use pinned versions"
+
+      - name: Check for suspicious external dependencies
+        run: |
+          echo "Checking for external dependencies..."
+          
+          # List all external actions used
+          echo "External actions used:"
+          find .github/workflows -name "*.yml" -exec grep -h "uses:" {} \; | \
+            grep -v "^\s*#" | sort | uniq
+          
+          # Check if any actions are from untrusted sources
+          if find .github/workflows -name "*.yml" -exec grep -l "uses:.*/" {} \; | \
+             xargs grep "uses:" | grep -v -E "(actions/|github/|microsoft/|docker/)"; then
+            echo "⚠️ Found actions from non-standard publishers"
+          fi
+          
+          echo "✅ Supply chain analysis complete"

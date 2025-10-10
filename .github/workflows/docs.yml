@@ -1,0 +1,242 @@
+name: Documentation Validation
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint-markdown:
+    name: Lint Markdown Files
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup environment and lint markdown
+        run: |
+          make install-deps-ubuntu && make setup
+          npm install -g markdownlint-cli
+          make lint-markdown
+
+      - name: Check for broken internal links
+        run: |
+          echo "Checking for broken internal file references..."
+          
+          # Check that referenced files in documentation exist
+          for md_file in README.md CONTRIBUTING.md; do
+            [ -f "$md_file" ] || continue
+            echo "Checking $md_file for broken internal links..."
+            
+            # Extract file references and check they exist
+            grep -o '\[.*\]([^)]*\.md[^)]*)' "$md_file" | \
+            sed 's/.*(\([^)]*\)).*/\1/' | \
+            while read -r link; do
+              # Skip external links
+              [[ "$link" =~ ^https?:// ]] && continue
+              
+              # Check if internal file exists
+              if [[ -n "$link" && ! -f "$link" ]]; then
+                echo "❌ Broken link in $md_file: $link"
+                exit 1
+              fi
+            done
+          done
+          
+          echo "✅ No broken internal links found"
+
+  validate-examples:
+    name: Validate Code Examples
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup environment
+        run: make install-deps-ubuntu && make setup
+
+
+      - name: Validate Makefile examples in documentation
+        run: |
+          echo "Checking that documented Makefile targets exist..."
+          
+          # Extract make commands mentioned in documentation
+          grep -h -o 'make [a-z][a-z-]*' README.md CONTRIBUTING.md | sort -u | while read -r cmd; do
+            target=${cmd#make }
+            echo "Checking if target '$target' exists in Makefile..."
+            
+            if ! grep -q "^${target}:" Makefile; then
+              echo "❌ Documented target '$target' not found in Makefile"
+              exit 1
+            fi
+          done
+          
+          echo "✅ All documented Makefile targets exist"
+
+      - name: Validate tool command examples
+        run: |
+          echo "Validating tool command examples..."
+          
+          # Extract tool commands from documentation and verify they show help
+          grep -h -o '\./tools/ocp-[a-z-]* --help' README.md CONTRIBUTING.md | sort -u | while read -r cmd; do
+            echo "Testing command: $cmd"
+            $cmd >/dev/null || {
+              echo "❌ Command failed: $cmd"
+              exit 1
+            }
+          done
+          
+          echo "✅ All documented tool commands work"
+
+  check-documentation-completeness:
+    name: Check Documentation Completeness
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup environment
+        run: make install-deps-ubuntu && make setup
+
+      - name: Verify all tools are documented
+        run: |
+          echo "Checking that all tools are documented..."
+          
+          # Get list of all tools
+          tools_found=$(ls tools/ocp-* | sort)
+          
+          # Check each tool is mentioned in README
+          for tool in $tools_found; do
+            tool_name=$(basename "$tool")
+            echo "Checking if $tool_name is documented in README.md..."
+            
+            if ! grep -q "$tool_name" README.md; then
+              echo "❌ Tool $tool_name not documented in README.md"
+              exit 1
+            fi
+          done
+          
+          echo "✅ All tools are documented in README"
+
+      - name: Verify help text consistency
+        run: |
+          echo "Checking help text consistency across tools..."
+          
+          # Check that all tools provide consistent help structure
+          for tool in tools/ocp-*; do
+            echo "Checking help structure for $(basename "$tool")..."
+            
+            help_output=$($tool --help)
+            
+            # Check for required help sections
+            echo "$help_output" | grep -q "USAGE:" || {
+              echo "❌ $(basename "$tool") missing USAGE section in help"
+              exit 1
+            }
+            
+            echo "$help_output" | grep -q "EXAMPLES:" || {
+              echo "❌ $(basename "$tool") missing EXAMPLES section in help"
+              exit 1
+            }
+          done
+          
+          echo "✅ All tools have consistent help structure"
+
+      - name: Check version specification documentation
+        run: |
+          echo "Checking version specification documentation..."
+          
+          # Verify all tools document version specifications consistently
+          for tool in tools/ocp-*; do
+            help_output=$($tool --help)
+            
+            # Check for version specification examples
+            if ! echo "$help_output" | grep -q "4\.19\|all\|version"; then
+              echo "❌ $(basename "$tool") doesn't document version specifications"
+              exit 1
+            fi
+          done
+          
+          echo "✅ All tools document version specifications"
+
+  validate-contributing-guide:
+    name: Validate Contributing Guide
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check CONTRIBUTING.md structure
+        run: |
+          echo "Validating CONTRIBUTING.md structure..."
+          
+          # Check for required sections
+          required_sections=(
+            "Getting Started"
+            "Development Setup" 
+            "Contributing Guidelines"
+            "Pull Request Process"
+            "Code Style"
+            "Testing"
+            "Reporting Issues"
+          )
+          
+          for section in "${required_sections[@]}"; do
+            if ! grep -q "$section" CONTRIBUTING.md; then
+              echo "❌ CONTRIBUTING.md missing section: $section"
+              exit 1
+            fi
+          done
+          
+          echo "✅ CONTRIBUTING.md has all required sections"
+
+
+  check-license-compliance:
+    name: Check License Compliance
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verify LICENSE file exists and is valid
+        run: |
+          echo "Checking LICENSE file..."
+          
+          # Check LICENSE file exists
+          [ -f LICENSE ] || {
+            echo "❌ LICENSE file not found"
+            exit 1
+          }
+          
+          # Check it's Apache 2.0
+          grep -q "Apache License" LICENSE || {
+            echo "❌ LICENSE is not Apache License"
+            exit 1
+          }
+          
+          grep -q "Version 2.0" LICENSE || {
+            echo "❌ LICENSE is not Apache License Version 2.0"
+            exit 1
+          }
+          
+          echo "✅ LICENSE file is valid Apache 2.0"
+
+      - name: Check for license headers in scripts
+        run: |
+          echo "Checking for appropriate license attribution..."
+          
+          # Check that LICENSE is referenced in documentation
+          grep -q "Apache\|License" README.md || {
+            echo "❌ README.md doesn't reference licensing"
+            exit 1
+          }
+          
+          echo "✅ License compliance checks passed"
+
+

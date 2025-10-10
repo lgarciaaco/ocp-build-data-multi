@@ -5,8 +5,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
+# shellcheck source=lib/git-utils.sh
 source "$SCRIPT_DIR/lib/git-utils.sh"
+# shellcheck source=lib/yaml-utils.sh
 source "$SCRIPT_DIR/lib/yaml-utils.sh"
 
 # Default values
@@ -14,7 +17,6 @@ DRY_RUN=false
 VERBOSE=false
 DEBUG=false
 COMMAND=""
-VERSIONS=()
 
 # Help function
 show_help() {
@@ -199,7 +201,8 @@ file_patch_command() {
     log_info "Applying patch file $patch_file across versions: ${versions[*]}"
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ ! -d "$version_dir" ]]; then
             log_warning "Worktree for version $version does not exist, skipping"
@@ -251,7 +254,8 @@ sed_replace_command() {
     log_info "Replacing '$pattern' with '$replacement' across versions: ${versions[*]}"
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ ! -d "$version_dir" ]]; then
             log_warning "Worktree for version $version does not exist, skipping"
@@ -264,7 +268,8 @@ sed_replace_command() {
             # Show what files would be changed
             find "$version_dir" -name "*.yml" -type f | while read -r file; do
                 if grep -q "$pattern" "$file" 2>/dev/null; then
-                    local relative_path="${file#$version_dir/}"
+                    local relative_path
+                    relative_path="${file#"$version_dir"/}"
                     echo "  Would update: $relative_path"
                 fi
             done
@@ -295,7 +300,8 @@ hermetic_command() {
     log_info "Finding hermetic conversion candidates..."
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ ! -d "$version_dir" ]]; then
             log_warning "Worktree for version $version does not exist, skipping"
@@ -306,10 +312,12 @@ hermetic_command() {
         
         find "$version_dir/images" -name "*.yml" -type f | while read -r file; do
             if yaml_has "$file" ".konflux.network_mode"; then
-                local network_mode="$(yaml_get "$file" ".konflux.network_mode")"
+                local network_mode
+                network_mode="$(yaml_get "$file" ".konflux.network_mode")"
                 
                 if [[ "$network_mode" == "open" ]]; then
-                    local relative_path="${file#$version_dir/}"
+                    local relative_path
+                    relative_path="${file#"$version_dir"/}"
                     
                     if [[ "$DRY_RUN" == "true" ]]; then
                         echo "  Would remove network_mode from: $relative_path"
@@ -318,7 +326,8 @@ hermetic_command() {
                         yaml_delete "$file" ".konflux.network_mode" false
                         
                         # If the konflux section is now empty, remove it
-                        local konflux_keys="$(yaml_keys "$file" ".konflux" 2>/dev/null | wc -l)"
+                        local konflux_keys
+                        konflux_keys="$(yaml_keys "$file" ".konflux" 2>/dev/null | wc -l)"
                         if [[ "$konflux_keys" -eq 0 ]]; then
                             yaml_delete "$file" ".konflux" false
                         fi

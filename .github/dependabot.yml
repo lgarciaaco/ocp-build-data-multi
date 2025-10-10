@@ -1,0 +1,74 @@
+# Dependabot configuration for OpenShift Build Data Multi-Version Toolset
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  # GitHub Actions dependencies
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "maintainers"
+    assignees:
+      - "maintainers"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "github-actions"
+
+  # Docker dependencies (if any Dockerfiles are added)
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+    open-pull-requests-limit: 3
+    reviewers:
+      - "maintainers"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "docker"
+
+  # Monitor shell script dependencies (yamllint, shellcheck, etc.)
+  # This would be for any package.json or requirements.txt if added for linting tools
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+    open-pull-requests-limit: 3
+    reviewers:
+      - "maintainers"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "python"
+    # Only update if files exist
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+# Note: Since this is primarily a shell script project, most dependencies
+# are system-level tools (bash, yq, jq, gh, git) that are managed by the
+# package managers tested in the CI workflows (apt, brew, dnf).
+# 
+# Dependabot will primarily monitor:
+# 1. GitHub Actions versions in workflows
+# 2. Any Docker base images if Dockerfiles are added
+# 3. Python packages if requirements.txt is added for linting tools
+#
+# The main dependencies (yq, jq, gh) are pinned in the Makefile installation
+# commands and should be updated manually when new versions are tested.

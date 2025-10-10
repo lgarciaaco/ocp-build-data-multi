@@ -1,5 +1,8 @@
 # OpenShift Build Data Multi-Version Toolset Makefile
 
+# Force bash as shell for all commands
+SHELL := /bin/bash
+
 # Default target
 .PHONY: help
 help: ## Show this help message
@@ -164,3 +167,37 @@ status: ## Show current toolset status
 	else \
 		echo "❌ No worktrees initialized (run './tools/ocp-setup init')"; \
 	fi
+
+# Local Development and Testing
+# =============================
+
+# Linting targets
+.PHONY: lint-shell
+lint-shell: ## Run ShellCheck on all shell scripts
+	@echo "Running ShellCheck on shell scripts..."
+	@command -v shellcheck >/dev/null 2>&1 || { echo "❌ shellcheck not installed. Install with: apt-get install shellcheck / brew install shellcheck"; exit 1; }
+	@find tools/ -name "*.sh" -o -path "tools/ocp-*" | xargs shellcheck --severity=warning
+	@echo "✅ ShellCheck passed"
+
+.PHONY: lint-markdown
+lint-markdown: ## Run markdownlint on all markdown files
+	@echo "Running markdownlint on markdown files..."
+	@command -v markdownlint >/dev/null 2>&1 || { echo "❌ markdownlint not installed. Install with: npm install -g markdownlint-cli"; exit 1; }
+	@markdownlint README.md CONTRIBUTING.md
+	@echo "✅ Markdown linting passed"
+
+.PHONY: lint
+lint: lint-shell lint-markdown ## Run all linting checks
+	@echo "✅ All linting checks passed"
+
+# Additional validation targets
+.PHONY: validate-tools
+validate-tools: ## Test that all tools show help
+	@echo "Validating all tools show help..."
+	@for tool in tools/ocp-*; do echo "Testing $$tool --help"; $$tool --help >/dev/null 2>&1 || exit 1; done
+	@echo "✅ All tools validated"
+
+# Pre-commit checks
+.PHONY: pre-commit
+pre-commit: lint ## Run all checks before committing
+	@echo "✅ All pre-commit checks passed"

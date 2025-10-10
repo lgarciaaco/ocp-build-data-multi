@@ -1,10 +1,12 @@
 # OpenShift Build Data Multi-Version Toolset
 
-A powerful toolset for managing multiple OpenShift Container Platform versions simultaneously using git worktrees. This eliminates the need for tedious branch switching when working across different OpenShift releases.
+A powerful toolset for managing multiple OpenShift Container Platform versions simultaneously using git worktrees. This
+eliminates the need for tedious branch switching when working across different OpenShift releases.
 
 ## Overview
 
 This toolset provides unified commands to:
+
 - **Apply changes quickly across multiple versions** without branch switching
 - **Spot differences between versions** with comprehensive comparison tools
 - **List files and content across versions** with flexible viewing options
@@ -15,7 +17,7 @@ This toolset provides unified commands to:
 
 The toolset uses git worktrees to maintain separate working directories for each OpenShift version:
 
-```
+```text
 ocp-build-data-multi/
 ├── config/                 # Configuration files
 ├── tools/                  # Command-line tools
@@ -56,6 +58,7 @@ make install-deps-rhel     # RHEL/CentOS/Fedora
 ```
 
 **Required Tools:**
+
 - bash 4.0+
 - git
 - yq v4.0+
@@ -64,9 +67,10 @@ make install-deps-rhel     # RHEL/CentOS/Fedora
 
 ### 2. Personal Fork Setup
 
-1. **Fork the upstream repository**: Go to https://github.com/openshift-eng/ocp-build-data and create a fork
+1. **Fork the upstream repository**: Go to <https://github.com/openshift-eng/ocp-build-data> and create a fork
 
 2. **Configure your personal remote**:
+
    ```bash
    # Copy the template and edit with your GitHub username
    cp config/remotes.conf.example config/remotes.conf
@@ -74,6 +78,7 @@ make install-deps-rhel     # RHEL/CentOS/Fedora
    ```
 
 3. **Complete setup**:
+
    ```bash
    # Run the complete setup process
    make setup
@@ -210,6 +215,7 @@ ocp-view summary 4.17..4.21
 ```
 
 **Output Formats:**
+
 - `--format table` - Tabular output (default)
 - `--format columns` - Column-based output
 - `--format json` - JSON format for scripting
@@ -272,6 +278,7 @@ ocp-hermetic progress all
 ```
 
 **Output Formats:**
+
 - `--format table` - Tabular output (default)
 - `--format json` - JSON format
 - `--format csv` - CSV format
@@ -415,6 +422,7 @@ ocp-diff golang-versions all --format table
 ### Common Issues
 
 1. **Missing dependencies:**
+
    ```bash
    # Check what's missing
    make check-deps
@@ -424,6 +432,7 @@ ocp-diff golang-versions all --format table
    ```
 
 2. **"No such file or directory" errors:**
+
    ```bash
    # Make sure you're in the project root directory
    cd ocp-build-data-multi
@@ -432,6 +441,7 @@ ocp-diff golang-versions all --format table
    ```
 
 3. **Configuration issues:**
+
    ```bash
    # Check overall status
    make status
@@ -440,18 +450,21 @@ ocp-diff golang-versions all --format table
    make setup-config
    ```
 
-2. **Worktree conflicts:**
+4. **Worktree conflicts:**
+
    ```bash
    ocp-setup clean all
    ocp-setup init
    ```
 
-3. **YAML syntax errors:**
+5. **YAML syntax errors:**
+
    ```bash
    ocp-bulk validate all
    ```
 
-4. **Git remote issues:**
+6. **Git remote issues:**
+
    ```bash
    # Check remote configuration
    ocp-setup status
@@ -473,14 +486,72 @@ ocp-bulk --help
 ocp-hermetic --help
 ```
 
+## Local Testing
+
+Before submitting PRs, you can run local tests to ensure code quality and catch issues early:
+
+### Code Quality Checks
+
+```bash
+# Run all linting checks (ShellCheck + markdownlint)
+make lint
+
+# Run only shell script linting
+./scripts/lint.sh --shell-only
+
+# Run only markdown linting
+./scripts/lint.sh --markdown-only
+
+# Auto-fix markdown issues where possible
+./scripts/lint.sh --fix
+```
+
+### Dependency Validation
+
+```bash
+# Validate all dependencies are installed
+make check-deps
+
+# Check tool functionality 
+make validate
+```
+
+### Pre-commit Validation
+
+```bash
+# Run all local checks before committing
+make pre-commit
+
+# This runs: lint + dependency validation
+```
+
+### Local Testing Dependencies
+
+Install local testing tools:
+
+```bash
+# macOS
+brew install shellcheck
+npm install -g markdownlint-cli
+
+# Ubuntu/Debian
+sudo apt-get install shellcheck
+npm install -g markdownlint-cli
+
+# RHEL/Fedora
+sudo dnf install ShellCheck
+npm install -g markdownlint-cli
+```
+
 ## Contributing
 
 This toolset is designed for the OpenShift build data repository workflow. When contributing:
 
-1. Test changes with `--dry-run` first
-2. Validate YAML syntax with `ocp-bulk validate`
-3. Use descriptive commit messages
-4. Push to personal remotes, not origin
+1. **Run local tests first**: `make pre-commit`
+2. Test changes with `--dry-run` first
+3. Validate YAML syntax with `ocp-bulk validate`
+4. Use descriptive commit messages
+5. Push to personal remotes, not origin
 
 ## License
 
