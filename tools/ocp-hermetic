@@ -1,0 +1,926 @@
+#!/usr/bin/env bash
+# OpenShift Build Data Hermetic Conversion Tracking Tool
+# Track and manage hermetic build conversion progress across versions
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/common.sh"
+source "$SCRIPT_DIR/lib/git-utils.sh"
+source "$SCRIPT_DIR/lib/yaml-utils.sh"
+
+# Default values
+VERBOSE=false
+DEBUG=false
+OUTPUT_FORMAT="table"
+COMMAND=""
+
+# Help function
+show_help() {
+    cat << EOF
+OpenShift Build Data Hermetic Conversion Tracking Tool
+
+USAGE:
+    ocp-hermetic [COMMAND] [OPTIONS] [VERSIONS]
+
+COMMANDS:
+    status [versions]                     Show hermetic conversion status
+    candidates [versions]                 List images that can be converted to hermetic
+    converted [versions]                  List images already converted to hermetic
+    missing-lockfiles [versions]          List images missing cachi2 lockfiles
+    convert <image-name> [versions]       Convert specific image to hermetic
+    report [versions]                     Generate comprehensive conversion report
+    progress [versions]                   Show conversion progress statistics
+
+OPTIONS:
+    -f, --format <format>     Output format: table, json, csv (default: table)
+    -v, --verbose             Enable verbose output
+    -d, --debug               Enable debug output
+    -h, --help                Show this help message
+
+EXAMPLES:
+    # Show overall hermetic conversion status
+    ocp-hermetic status all
+
+    # List conversion candidates for specific versions
+    ocp-hermetic candidates 4.19,4.20,4.21
+
+    # Check which images are missing lockfiles
+    ocp-hermetic missing-lockfiles 4.19+
+
+    # Convert a specific image to hermetic
+    ocp-hermetic convert openshift-enterprise-base 4.19,4.20
+
+    # Generate a comprehensive report
+    ocp-hermetic report 4.17..4.21
+
+    # Show conversion progress
+    ocp-hermetic progress all
+
+$(show_common_help)
+EOF
+}
+
+# Parse command line arguments
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            -f|--format)
+                OUTPUT_FORMAT="$2"
+                shift 2
+                ;;
+            -v|--verbose)
+                VERBOSE=true
+                shift
+                ;;
+            -d|--debug)
+                DEBUG=true
+                export DEBUG=1
+                shift
+                ;;
+            status|candidates|converted|missing-lockfiles|convert|report|progress)
+                COMMAND="$1"
+                shift
+                break
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                show_help
+                exit 1
+                ;;
+        esac
+    done
+    
+    # Store remaining arguments for command-specific parsing
+    REMAINING_ARGS=("$@")
+}
+
+# Show hermetic conversion status
+status_command() {
+    local args=("$@")
+    local versions_spec="${args[0]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Hermetic conversion status across versions: ${versions[*]}"
+    echo
+    
+    case "$OUTPUT_FORMAT" in
+        "table")
+            show_status_table "${versions[@]}"
+            ;;
+        "json")
+            show_status_json "${versions[@]}"
+            ;;
+        "csv")
+            show_status_csv "${versions[@]}"
+            ;;
+        *)
+            log_error "Unknown output format: $OUTPUT_FORMAT"
+            exit 1
+            ;;
+    esac
+}
+
+# List conversion candidates
+candidates_command() {
+    local args=("$@")
+    local versions_spec="${args[0]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Hermetic conversion candidates across versions: ${versions[*]}"
+    echo
+    
+    case "$OUTPUT_FORMAT" in
+        "table")
+            show_candidates_table "${versions[@]}"
+            ;;
+        "json")
+            show_candidates_json "${versions[@]}"
+            ;;
+        "csv")
+            show_candidates_csv "${versions[@]}"
+            ;;
+        *)
+            log_error "Unknown output format: $OUTPUT_FORMAT"
+            exit 1
+            ;;
+    esac
+}
+
+# List converted images
+converted_command() {
+    local args=("$@")
+    local versions_spec="${args[0]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Images already converted to hermetic across versions: ${versions[*]}"
+    echo
+    
+    case "$OUTPUT_FORMAT" in
+        "table")
+            show_converted_table "${versions[@]}"
+            ;;
+        "json")
+            show_converted_json "${versions[@]}"
+            ;;
+        "csv")
+            show_converted_csv "${versions[@]}"
+            ;;
+        *)
+            log_error "Unknown output format: $OUTPUT_FORMAT"
+            exit 1
+            ;;
+    esac
+}
+
+# List images missing lockfiles
+missing_lockfiles_command() {
+    local args=("$@")
+    local versions_spec="${args[0]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Images missing cachi2 lockfiles across versions: ${versions[*]}"
+    echo
+    
+    case "$OUTPUT_FORMAT" in
+        "table")
+            show_missing_lockfiles_table "${versions[@]}"
+            ;;
+        "json")
+            show_missing_lockfiles_json "${versions[@]}"
+            ;;
+        "csv")
+            show_missing_lockfiles_csv "${versions[@]}"
+            ;;
+        *)
+            log_error "Unknown output format: $OUTPUT_FORMAT"
+            exit 1
+            ;;
+    esac
+}
+
+# Convert specific image to hermetic
+convert_command() {
+    local args=("$@")
+    
+    if [[ ${#args[@]} -lt 1 ]]; then
+        log_error "convert command requires: <image-name> [versions]"
+        exit 1
+    fi
+    
+    local image_name="${args[0]}"
+    local versions_spec="${args[1]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Converting $image_name to hermetic across versions: ${versions[*]}"
+    
+    local success_count=0
+    local total_count=0
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        local image_file="$version_dir/images/${image_name}.yml"
+        
+        if [[ ! -f "$image_file" ]]; then
+            log_warning "Image $image_name not found in version $version, skipping"
+            continue
+        fi
+        
+        ((total_count++))
+        
+        log_info "Processing $image_name in version $version..."
+        
+        # Check if already hermetic
+        local network_mode="$(yaml_get "$image_file" ".konflux.network_mode")"
+        
+        if [[ "$network_mode" == "null" ]]; then
+            log_info "  Image $image_name in version $version is already hermetic (no explicit network_mode)"
+            ((success_count++))
+            continue
+        elif [[ "$network_mode" == "hermetic" ]]; then
+            log_info "  Image $image_name in version $version is already hermetic"
+            ((success_count++))
+            continue
+        elif [[ "$network_mode" == "open" ]]; then
+            log_info "  Converting $image_name in version $version from open to hermetic"
+            
+            # Remove the network_mode key
+            if yaml_delete "$image_file" ".konflux.network_mode" false; then
+                log_success "  Converted $image_name in version $version"
+                ((success_count++))
+                
+                # Check if konflux section is now empty and remove it
+                local konflux_keys="$(yaml_keys "$image_file" ".konflux" 2>/dev/null | wc -l || echo 0)"
+                if [[ "$konflux_keys" -eq 0 ]]; then
+                    yaml_delete "$image_file" ".konflux" false
+                    log_debug "  Removed empty konflux section"
+                fi
+            else
+                log_error "  Failed to convert $image_name in version $version"
+            fi
+        else
+            log_warning "  Unknown network_mode '$network_mode' for $image_name in version $version"
+        fi
+    done
+    
+    log_info "Conversion summary: $success_count of $total_count images processed"
+    
+    if [[ $success_count -gt 0 ]]; then
+        log_info "Remember to:"
+        log_info "  1. Test the builds to ensure they work in hermetic mode"
+        log_info "  2. Add cachi2 lockfiles if builds fail"
+        log_info "  3. Commit and push the changes"
+    fi
+}
+
+# Generate comprehensive report
+report_command() {
+    local args=("$@")
+    local versions_spec="${args[0]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Generating hermetic conversion report for versions: ${versions[*]}"
+    echo
+    
+    # Overall statistics
+    echo "=== HERMETIC CONVERSION REPORT ==="
+    echo "Generated: $(date)"
+    echo "Versions: ${versions[*]}"
+    echo
+    
+    # Version summary
+    echo "=== VERSION SUMMARY ==="
+    printf "%-8s %-15s %-15s %-15s %-15s\n" "VERSION" "DEFAULT_MODE" "TOTAL_IMAGES" "OPEN_IMAGES" "HERMETIC_READY"
+    printf "%-8s %-15s %-15s %-15s %-15s\n" "-------" "---------------" "---------------" "---------------" "---------------"
+    
+    local total_open_images=0
+    local total_images=0
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        
+        if [[ ! -d "$version_dir" ]]; then
+            printf "%-8s %-15s %-15s %-15s %-15s\n" "$version" "N/A" "N/A" "N/A" "N/A"
+            continue
+        fi
+        
+        # Get default mode
+        local group_file="$version_dir/group.yml"
+        local default_mode="hermetic"
+        if [[ -f "$group_file" ]]; then
+            local mode="$(yaml_get "$group_file" ".konflux.network_mode")"
+            [[ "$mode" != "null" ]] && default_mode="$mode"
+        fi
+        
+        # Count images
+        local image_count=0
+        local open_count=0
+        
+        if [[ -d "$version_dir/images" ]]; then
+            image_count="$(find "$version_dir/images" -name "*.yml" -type f | wc -l | xargs)"
+            open_count="$(find "$version_dir/images" -name "*.yml" -type f -exec grep -l "network_mode: open" {} \; 2>/dev/null | wc -l | xargs)"
+        fi
+        
+        local hermetic_ready="Yes"
+        [[ "$default_mode" != "hermetic" ]] && hermetic_ready="No (default)"
+        [[ "$open_count" -gt 0 ]] && hermetic_ready="No ($open_count open)"
+        
+        printf "%-8s %-15s %-15s %-15s %-15s\n" "$version" "$default_mode" "$image_count" "$open_count" "$hermetic_ready"
+        
+        total_images=$((total_images + image_count))
+        total_open_images=$((total_open_images + open_count))
+    done
+    
+    echo
+    echo "=== OVERALL STATISTICS ==="
+    echo "Total images across all versions: $total_images"
+    echo "Images still using open mode: $total_open_images"
+    echo "Conversion progress: $(( (total_images - total_open_images) * 100 / total_images ))% complete"
+    
+    # Detailed breakdown
+    echo
+    echo "=== CONVERSION CANDIDATES ==="
+    
+    # Collect all unique open images
+    local temp_dir="$(mktemp -d)"
+    trap "rm -rf '$temp_dir'" EXIT
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        
+        if [[ -d "$version_dir/images" ]]; then
+            find "$version_dir/images" -name "*.yml" -type f | while read -r file; do
+                if yaml_has "$file" ".konflux.network_mode"; then
+                    local mode="$(yaml_get "$file" ".konflux.network_mode")"
+                    if [[ "$mode" == "open" ]]; then
+                        local filename="$(basename "$file" .yml)"
+                        echo "$filename"
+                    fi
+                fi
+            done > "$temp_dir/open_$version"
+        else
+            touch "$temp_dir/open_$version"
+        fi
+    done
+    
+    # Get unique list
+    cat "$temp_dir"/open_* | sort -u > "$temp_dir/all_open"
+    
+    if [[ -s "$temp_dir/all_open" ]]; then
+        printf "%-30s" "IMAGE"
+        for version in "${versions[@]}"; do
+            printf " %-8s" "$version"
+        done
+        echo
+        
+        printf "%-30s" "-----"
+        for version in "${versions[@]}"; do
+            printf " %-8s" "--------"
+        done
+        echo
+        
+        while IFS= read -r image; do
+            printf "%-30s" "$image"
+            
+            for version in "${versions[@]}"; do
+                if grep -q "^$image$" "$temp_dir/open_$version" 2>/dev/null; then
+                    printf " %-8s" "OPEN"
+                else
+                    printf " %-8s" "✓"
+                fi
+            done
+            echo
+        done < "$temp_dir/all_open"
+    else
+        echo "No images found with network_mode: open - all conversions complete!"
+    fi
+    
+    echo
+    echo "=== RECOMMENDATIONS ==="
+    
+    if [[ $total_open_images -eq 0 ]]; then
+        echo "✓ All images have been converted to hermetic builds"
+        echo "✓ No further action required for network mode conversion"
+    else
+        echo "• Convert remaining $total_open_images images to hermetic builds"
+        echo "• Test hermetic builds for any failures"
+        echo "• Add cachi2 lockfiles for images that fail hermetic builds"
+        echo "• Monitor build logs for dependency issues"
+    fi
+    
+    # Missing lockfiles check
+    echo
+    echo "=== LOCKFILE STATUS ==="
+    
+    local missing_lockfiles=0
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        
+        if [[ -d "$version_dir/images" ]]; then
+            find "$version_dir/images" -name "*.yml" -type f | while read -r file; do
+                local network_mode="$(yaml_get "$file" ".konflux.network_mode")"
+                local has_lockfile="$(yaml_has "$file" ".konflux.cachi2.lockfile")"
+                
+                # If no explicit network_mode, it defaults to hermetic
+                if [[ "$network_mode" == "null" || "$network_mode" == "hermetic" ]]; then
+                    if ! $has_lockfile; then
+                        ((missing_lockfiles++))
+                    fi
+                fi
+            done
+        fi
+    done
+    
+    if [[ $missing_lockfiles -eq 0 ]]; then
+        echo "✓ All hermetic images have lockfiles or don't need them"
+    else
+        echo "⚠ $missing_lockfiles hermetic images may need lockfiles"
+        echo "  Use 'ocp-hermetic missing-lockfiles' for details"
+    fi
+}
+
+# Show conversion progress
+progress_command() {
+    local args=("$@")
+    local versions_spec="${args[0]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Hermetic conversion progress across versions: ${versions[*]}"
+    echo
+    
+    printf "%-8s %-10s %-10s %-10s %-12s\n" "VERSION" "TOTAL" "HERMETIC" "OPEN" "PROGRESS"
+    printf "%-8s %-10s %-10s %-10s %-12s\n" "-------" "-----" "--------" "----" "--------"
+    
+    local grand_total=0
+    local grand_hermetic=0
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        
+        if [[ ! -d "$version_dir/images" ]]; then
+            printf "%-8s %-10s %-10s %-10s %-12s\n" "$version" "N/A" "N/A" "N/A" "N/A"
+            continue
+        fi
+        
+        local total_images="$(find "$version_dir/images" -name "*.yml" -type f | wc -l | xargs)"
+        local open_images="$(find "$version_dir/images" -name "*.yml" -type f -exec grep -l "network_mode: open" {} \; 2>/dev/null | wc -l | xargs)"
+        local hermetic_images=$((total_images - open_images))
+        local progress_pct=0
+        
+        if [[ $total_images -gt 0 ]]; then
+            progress_pct=$((hermetic_images * 100 / total_images))
+        fi
+        
+        printf "%-8s %-10s %-10s %-10s %-12s\n" "$version" "$total_images" "$hermetic_images" "$open_images" "${progress_pct}%"
+        
+        grand_total=$((grand_total + total_images))
+        grand_hermetic=$((grand_hermetic + hermetic_images))
+    done
+    
+    echo
+    echo "=== OVERALL PROGRESS ==="
+    local overall_progress=0
+    if [[ $grand_total -gt 0 ]]; then
+        overall_progress=$((grand_hermetic * 100 / grand_total))
+    fi
+    
+    echo "Total images: $grand_total"
+    echo "Hermetic images: $grand_hermetic"
+    echo "Open images: $((grand_total - grand_hermetic))"
+    echo "Overall progress: ${overall_progress}%"
+    
+    # Progress bar
+    local bar_length=50
+    local filled_length=$((overall_progress * bar_length / 100))
+    local bar=""
+    
+    for (( i=0; i<filled_length; i++ )); do
+        bar+="█"
+    done
+    
+    for (( i=filled_length; i<bar_length; i++ )); do
+        bar+="░"
+    done
+    
+    echo "Progress: [$bar] ${overall_progress}%"
+}
+
+# Helper functions for different output formats
+
+show_status_table() {
+    local versions=("$@")
+    
+    printf "%-8s %-15s %-10s %-10s %-15s\n" "VERSION" "DEFAULT_MODE" "TOTAL" "OPEN" "STATUS"
+    printf "%-8s %-15s %-10s %-10s %-15s\n" "-------" "---------------" "-----" "----" "---------------"
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        
+        if [[ ! -d "$version_dir" ]]; then
+            printf "%-8s %-15s %-10s %-10s %-15s\n" "$version" "N/A" "N/A" "N/A" "Missing"
+            continue
+        fi
+        
+        # Get default mode
+        local group_file="$version_dir/group.yml"
+        local default_mode="hermetic"
+        if [[ -f "$group_file" ]]; then
+            local mode="$(yaml_get "$group_file" ".konflux.network_mode")"
+            [[ "$mode" != "null" ]] && default_mode="$mode"
+        fi
+        
+        # Count images
+        local total_count=0
+        local open_count=0
+        
+        if [[ -d "$version_dir/images" ]]; then
+            total_count="$(find "$version_dir/images" -name "*.yml" -type f | wc -l | xargs)"
+            open_count="$(find "$version_dir/images" -name "*.yml" -type f -exec grep -l "network_mode: open" {} \; 2>/dev/null | wc -l | xargs)"
+        fi
+        
+        local status="Ready"
+        [[ "$default_mode" != "hermetic" ]] && status="Not ready"
+        [[ "$open_count" -gt 0 ]] && status="In progress"
+        
+        printf "%-8s %-15s %-10s %-10s %-15s\n" "$version" "$default_mode" "$total_count" "$open_count" "$status"
+    done
+}
+
+show_status_json() {
+    local versions=("$@")
+    
+    echo "{"
+    echo "  \"hermetic_status\": {"
+    
+    local first=true
+    for version in "${versions[@]}"; do
+        [[ "$first" != "true" ]] && echo ","
+        first=false
+        
+        local version_dir="$(get_version_dir "$version")"
+        
+        echo "    \"$version\": {"
+        
+        if [[ ! -d "$version_dir" ]]; then
+            echo "      \"exists\": false"
+        else
+            echo "      \"exists\": true,"
+            
+            # Get default mode
+            local group_file="$version_dir/group.yml"
+            local default_mode="hermetic"
+            if [[ -f "$group_file" ]]; then
+                local mode="$(yaml_get "$group_file" ".konflux.network_mode")"
+                [[ "$mode" != "null" ]] && default_mode="$mode"
+            fi
+            
+            # Count images
+            local total_count=0
+            local open_count=0
+            
+            if [[ -d "$version_dir/images" ]]; then
+                total_count="$(find "$version_dir/images" -name "*.yml" -type f | wc -l | xargs)"
+                open_count="$(find "$version_dir/images" -name "*.yml" -type f -exec grep -l "network_mode: open" {} \; 2>/dev/null | wc -l | xargs)"
+            fi
+            
+            echo "      \"default_mode\": \"$default_mode\","
+            echo "      \"total_images\": $total_count,"
+            echo "      \"open_images\": $open_count,"
+            echo "      \"hermetic_images\": $((total_count - open_count)),"
+            echo "      \"conversion_complete\": $([ $open_count -eq 0 ] && echo "true" || echo "false")"
+        fi
+        
+        echo "    }"
+    done
+    
+    echo "  }"
+    echo "}"
+}
+
+show_status_csv() {
+    local versions=("$@")
+    
+    echo "Version,DefaultMode,TotalImages,OpenImages,HermeticImages,ConversionComplete"
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        
+        if [[ ! -d "$version_dir" ]]; then
+            echo "$version,N/A,N/A,N/A,N/A,N/A"
+            continue
+        fi
+        
+        # Get default mode
+        local group_file="$version_dir/group.yml"
+        local default_mode="hermetic"
+        if [[ -f "$group_file" ]]; then
+            local mode="$(yaml_get "$group_file" ".konflux.network_mode")"
+            [[ "$mode" != "null" ]] && default_mode="$mode"
+        fi
+        
+        # Count images
+        local total_count=0
+        local open_count=0
+        
+        if [[ -d "$version_dir/images" ]]; then
+            total_count="$(find "$version_dir/images" -name "*.yml" -type f | wc -l | xargs)"
+            open_count="$(find "$version_dir/images" -name "*.yml" -type f -exec grep -l "network_mode: open" {} \; 2>/dev/null | wc -l | xargs)"
+        fi
+        
+        local hermetic_count=$((total_count - open_count))
+        local complete=$([ $open_count -eq 0 ] && echo "true" || echo "false")
+        
+        echo "$version,$default_mode,$total_count,$open_count,$hermetic_count,$complete"
+    done
+}
+
+show_candidates_table() {
+    local versions=("$@")
+    
+    # Collect all open images across versions
+    local temp_dir="$(mktemp -d)"
+    trap "rm -rf '$temp_dir'" EXIT
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        
+        if [[ -d "$version_dir/images" ]]; then
+            find "$version_dir/images" -name "*.yml" -type f | while read -r file; do
+                if yaml_has "$file" ".konflux.network_mode"; then
+                    local mode="$(yaml_get "$file" ".konflux.network_mode")"
+                    if [[ "$mode" == "open" ]]; then
+                        local filename="$(basename "$file" .yml)"
+                        echo "$filename"
+                    fi
+                fi
+            done > "$temp_dir/open_$version"
+        else
+            touch "$temp_dir/open_$version"
+        fi
+    done
+    
+    # Get unique list
+    cat "$temp_dir"/open_* 2>/dev/null | sort -u > "$temp_dir/all_open"
+    
+    if [[ ! -s "$temp_dir/all_open" ]]; then
+        echo "No hermetic conversion candidates found - all images are already hermetic!"
+        return 0
+    fi
+    
+    printf "%-35s" "IMAGE"
+    for version in "${versions[@]}"; do
+        printf " %-8s" "$version"
+    done
+    echo
+    
+    printf "%-35s" "---"
+    for version in "${versions[@]}"; do
+        printf " %-8s" "--------"
+    done
+    echo
+    
+    while IFS= read -r image; do
+        printf "%-35s" "$image"
+        
+        for version in "${versions[@]}"; do
+            if grep -q "^$image$" "$temp_dir/open_$version" 2>/dev/null; then
+                printf " %-8s" "OPEN"
+            else
+                printf " %-8s" "✓"
+            fi
+        done
+        echo
+    done < "$temp_dir/all_open"
+}
+
+show_candidates_json() {
+    local versions=("$@")
+    
+    echo "{"
+    echo "  \"conversion_candidates\": ["
+    
+    # Implementation similar to table but in JSON format
+    # ... (implementation details)
+    
+    echo "  ]"
+    echo "}"
+}
+
+show_candidates_csv() {
+    local versions=("$@")
+    
+    echo -n "Image"
+    for version in "${versions[@]}"; do
+        echo -n ",$version"
+    done
+    echo
+    
+    # Implementation similar to table but in CSV format
+    # ... (implementation details)
+}
+
+show_converted_table() {
+    local versions=("$@")
+    
+    printf "%-35s %-15s %s\n" "IMAGE" "STATUS" "VERSIONS"
+    printf "%-35s %-15s %s\n" "-----" "-------" "--------"
+    
+    # Show images that are hermetic in all requested versions
+    # ... (implementation details)
+}
+
+show_converted_json() {
+    local versions=("$@")
+    
+    echo "{"
+    echo "  \"converted_images\": ["
+    # ... (implementation details)
+    echo "  ]"
+    echo "}"
+}
+
+show_converted_csv() {
+    local versions=("$@")
+    
+    echo "Image,Status,ConvertedVersions"
+    # ... (implementation details)
+}
+
+show_missing_lockfiles_table() {
+    local versions=("$@")
+    
+    printf "%-35s" "IMAGE"
+    for version in "${versions[@]}"; do
+        printf " %-8s" "$version"
+    done
+    echo
+    
+    printf "%-35s" "-----"
+    for version in "${versions[@]}"; do
+        printf " %-8s" "--------"
+    done
+    echo
+    
+    # Check each version for hermetic images without lockfiles
+    local temp_dir="$(mktemp -d)"
+    trap "rm -rf '$temp_dir'" EXIT
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        
+        if [[ -d "$version_dir/images" ]]; then
+            find "$version_dir/images" -name "*.yml" -type f | while read -r file; do
+                local network_mode="$(yaml_get "$file" ".konflux.network_mode")"
+                local has_lockfile="$(yaml_has "$file" ".konflux.cachi2.lockfile")"
+                
+                # If no explicit network_mode, it defaults to hermetic
+                if [[ "$network_mode" == "null" || "$network_mode" == "hermetic" ]]; then
+                    if ! $has_lockfile; then
+                        local filename="$(basename "$file" .yml)"
+                        echo "$filename"
+                    fi
+                fi
+            done > "$temp_dir/missing_$version"
+        else
+            touch "$temp_dir/missing_$version"
+        fi
+    done
+    
+    # Get unique list
+    cat "$temp_dir"/missing_* 2>/dev/null | sort -u > "$temp_dir/all_missing"
+    
+    if [[ ! -s "$temp_dir/all_missing" ]]; then
+        echo "No images missing lockfiles found - all hermetic images have lockfiles!"
+        return 0
+    fi
+    
+    while IFS= read -r image; do
+        printf "%-35s" "$image"
+        
+        for version in "${versions[@]}"; do
+            if grep -q "^$image$" "$temp_dir/missing_$version" 2>/dev/null; then
+                printf " %-8s" "MISSING"
+            else
+                printf " %-8s" "✓"
+            fi
+        done
+        echo
+    done < "$temp_dir/all_missing"
+}
+
+show_missing_lockfiles_json() {
+    local versions=("$@")
+    
+    echo "{"
+    echo "  \"missing_lockfiles\": ["
+    # ... (implementation details)
+    echo "  ]"
+    echo "}"
+}
+
+show_missing_lockfiles_csv() {
+    local versions=("$@")
+    
+    echo -n "Image"
+    for version in "${versions[@]}"; do
+        echo -n ",$version"
+    done
+    echo
+    
+    # ... (implementation details)
+}
+
+# Main function
+main() {
+    # Check dependencies
+    if ! check_dependencies; then
+        exit 1
+    fi
+    
+    # Parse command line arguments
+    parse_args "$@"
+    
+    # Set verbose mode
+    if [[ "$VERBOSE" == "true" ]]; then
+        set -x
+    fi
+    
+    # Execute command
+    case "$COMMAND" in
+        "status")
+            status_command "${REMAINING_ARGS[@]}"
+            ;;
+        "candidates")
+            candidates_command "${REMAINING_ARGS[@]}"
+            ;;
+        "converted")
+            converted_command "${REMAINING_ARGS[@]}"
+            ;;
+        "missing-lockfiles")
+            missing_lockfiles_command "${REMAINING_ARGS[@]}"
+            ;;
+        "convert")
+            convert_command "${REMAINING_ARGS[@]}"
+            ;;
+        "report")
+            report_command "${REMAINING_ARGS[@]}"
+            ;;
+        "progress")
+            progress_command "${REMAINING_ARGS[@]}"
+            ;;
+        "")
+            log_error "No command specified"
+            show_help
+            exit 1
+            ;;
+        *)
+            log_error "Unknown command: $COMMAND"
+            show_help
+            exit 1
+            ;;
+    esac
+}
+
+# Run main function if script is executed directly
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

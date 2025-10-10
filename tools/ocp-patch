@@ -1,0 +1,391 @@
+#!/usr/bin/env bash
+# OpenShift Build Data Multi-Version Patching Tool
+# Apply changes across multiple OpenShift versions
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/common.sh"
+source "$SCRIPT_DIR/lib/git-utils.sh"
+source "$SCRIPT_DIR/lib/yaml-utils.sh"
+
+# Default values
+DRY_RUN=false
+VERBOSE=false
+DEBUG=false
+COMMAND=""
+VERSIONS=()
+
+# Help function
+show_help() {
+    cat << EOF
+OpenShift Build Data Multi-Version Patching Tool
+
+USAGE:
+    ocp-patch [COMMAND] [OPTIONS] [VERSIONS]
+
+COMMANDS:
+    yaml-set <path> <value> [file-pattern]    Set YAML value across versions
+    yaml-delete <path> [file-pattern]        Delete YAML key across versions
+    yaml-script <script> [file-pattern]      Apply custom yq script across versions
+    file-patch <patch-file>                  Apply unified diff patch across versions
+    sed-replace <pattern> <replacement>      Apply sed replacement across versions
+    hermetic                                 Remove network_mode: open for hermetic conversion
+
+OPTIONS:
+    --dry-run             Show what would be done without making changes
+    -v, --verbose         Enable verbose output
+    -d, --debug           Enable debug output
+    -h, --help            Show this help message
+
+EXAMPLES:
+    # Remove network_mode for hermetic conversion
+    ocp-patch hermetic 4.19,4.20,4.21
+
+    # Set a YAML value across multiple versions
+    ocp-patch yaml-set ".golang_version" "1.23" "images/*.yml" 4.17..4.21
+
+    # Delete a YAML key from specific files
+    ocp-patch yaml-delete ".konflux.network_mode" "images/component.yml" 4.19+
+
+    # Apply a custom yq script
+    ocp-patch yaml-script '.konflux.cachi2.enabled = true' "images/*.yml" all
+
+    # Apply a unified diff patch
+    ocp-patch file-patch fix.patch 4.20,4.21
+
+    # Replace text with sed
+    ocp-patch sed-replace "old-text" "new-text" 4.19+
+
+$(show_common_help)
+EOF
+}
+
+# Parse command line arguments
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            --dry-run)
+                DRY_RUN=true
+                export DRY_RUN=true
+                shift
+                ;;
+            -v|--verbose)
+                VERBOSE=true
+                shift
+                ;;
+            -d|--debug)
+                DEBUG=true
+                export DEBUG=1
+                shift
+                ;;
+            yaml-set|yaml-delete|yaml-script|file-patch|sed-replace|hermetic)
+                COMMAND="$1"
+                shift
+                break
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                show_help
+                exit 1
+                ;;
+        esac
+    done
+    
+    # Store remaining arguments for command-specific parsing
+    REMAINING_ARGS=("$@")
+}
+
+# YAML set operation
+yaml_set_command() {
+    local args=("$@")
+    
+    if [[ ${#args[@]} -lt 3 ]]; then
+        log_error "yaml-set requires: <path> <value> <file-pattern> [versions]"
+        exit 1
+    fi
+    
+    local yaml_path="${args[0]}"
+    local value="${args[1]}"
+    local file_pattern="${args[2]}"
+    local versions_spec="${args[3]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Setting $yaml_path = '$value' in $file_pattern across versions: ${versions[*]}"
+    
+    yaml_transform "$file_pattern" "$yaml_path" "set" "$value" "${versions[@]}"
+}
+
+# YAML delete operation
+yaml_delete_command() {
+    local args=("$@")
+    
+    if [[ ${#args[@]} -lt 2 ]]; then
+        log_error "yaml-delete requires: <path> <file-pattern> [versions]"
+        exit 1
+    fi
+    
+    local yaml_path="${args[0]}"
+    local file_pattern="${args[1]}"
+    local versions_spec="${args[2]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Deleting $yaml_path from $file_pattern across versions: ${versions[*]}"
+    
+    yaml_transform "$file_pattern" "$yaml_path" "delete" "" "${versions[@]}"
+}
+
+# YAML script operation
+yaml_script_command() {
+    local args=("$@")
+    
+    if [[ ${#args[@]} -lt 2 ]]; then
+        log_error "yaml-script requires: <script> <file-pattern> [versions]"
+        exit 1
+    fi
+    
+    local script="${args[0]}"
+    local file_pattern="${args[1]}"
+    local versions_spec="${args[2]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Applying yq script '$script' to $file_pattern across versions: ${versions[*]}"
+    
+    yaml_transform "$file_pattern" "" "script" "$script" "${versions[@]}"
+}
+
+# File patch operation
+file_patch_command() {
+    local args=("$@")
+    
+    if [[ ${#args[@]} -lt 2 ]]; then
+        log_error "file-patch requires: <patch-file> [versions]"
+        exit 1
+    fi
+    
+    local patch_file="${args[0]}"
+    local versions_spec="${args[1]:-all}"
+    
+    if [[ ! -f "$patch_file" ]]; then
+        log_error "Patch file not found: $patch_file"
+        exit 1
+    fi
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Applying patch file $patch_file across versions: ${versions[*]}"
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        
+        if [[ ! -d "$version_dir" ]]; then
+            log_warning "Worktree for version $version does not exist, skipping"
+            continue
+        fi
+        
+        log_info "Applying patch to version $version..."
+        
+        if [[ "$DRY_RUN" == "true" ]]; then
+            log_info "  Would apply patch to $version_dir"
+            continue
+        fi
+        
+        (
+            cd "$version_dir"
+            
+            if patch -p1 --dry-run < "$patch_file" > /dev/null 2>&1; then
+                if patch -p1 < "$patch_file"; then
+                    log_success "Applied patch to version $version"
+                else
+                    log_error "Failed to apply patch to version $version"
+                fi
+            else
+                log_warning "Patch does not apply cleanly to version $version, skipping"
+            fi
+        )
+    done
+}
+
+# Sed replace operation
+sed_replace_command() {
+    local args=("$@")
+    
+    if [[ ${#args[@]} -lt 3 ]]; then
+        log_error "sed-replace requires: <pattern> <replacement> [versions]"
+        exit 1
+    fi
+    
+    local pattern="${args[0]}"
+    local replacement="${args[1]}"
+    local versions_spec="${args[2]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Replacing '$pattern' with '$replacement' across versions: ${versions[*]}"
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        
+        if [[ ! -d "$version_dir" ]]; then
+            log_warning "Worktree for version $version does not exist, skipping"
+            continue
+        fi
+        
+        log_info "Processing version $version..."
+        
+        if [[ "$DRY_RUN" == "true" ]]; then
+            # Show what files would be changed
+            find "$version_dir" -name "*.yml" -type f | while read -r file; do
+                if grep -q "$pattern" "$file" 2>/dev/null; then
+                    local relative_path="${file#$version_dir/}"
+                    echo "  Would update: $relative_path"
+                fi
+            done
+            continue
+        fi
+        
+        # Apply the replacement
+        find "$version_dir" -name "*.yml" -type f -exec sed -i "s|$pattern|$replacement|g" {} \;
+        
+        log_success "Applied sed replacement to version $version"
+    done
+}
+
+# Hermetic conversion operation
+hermetic_command() {
+    local args=("$@")
+    local versions_spec="${args[0]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Converting to hermetic builds (removing network_mode: open) across versions: ${versions[*]}"
+    
+    # First, find all candidates
+    log_info "Finding hermetic conversion candidates..."
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        
+        if [[ ! -d "$version_dir" ]]; then
+            log_warning "Worktree for version $version does not exist, skipping"
+            continue
+        fi
+        
+        log_info "Processing version $version..."
+        
+        find "$version_dir/images" -name "*.yml" -type f | while read -r file; do
+            if yaml_has "$file" ".konflux.network_mode"; then
+                local network_mode="$(yaml_get "$file" ".konflux.network_mode")"
+                
+                if [[ "$network_mode" == "open" ]]; then
+                    local relative_path="${file#$version_dir/}"
+                    
+                    if [[ "$DRY_RUN" == "true" ]]; then
+                        echo "  Would remove network_mode from: $relative_path"
+                    else
+                        log_info "  Removing network_mode from: $relative_path"
+                        yaml_delete "$file" ".konflux.network_mode" false
+                        
+                        # If the konflux section is now empty, remove it
+                        local konflux_keys="$(yaml_keys "$file" ".konflux" 2>/dev/null | wc -l)"
+                        if [[ "$konflux_keys" -eq 0 ]]; then
+                            yaml_delete "$file" ".konflux" false
+                        fi
+                    fi
+                fi
+            fi
+        done
+    done
+    
+    if [[ "$DRY_RUN" != "true" ]]; then
+        log_success "Hermetic conversion completed"
+        log_info "Remember to:"
+        log_info "  1. Test the builds to ensure they work in hermetic mode"
+        log_info "  2. Add cachi2 lockfiles if builds fail"
+        log_info "  3. Commit and push the changes"
+    fi
+}
+
+# Main function
+main() {
+    # Check dependencies
+    if ! check_dependencies; then
+        exit 1
+    fi
+    
+    # Parse command line arguments
+    parse_args "$@"
+    
+    # Set verbose mode
+    if [[ "$VERBOSE" == "true" ]]; then
+        set -x
+    fi
+    
+    # Execute command
+    case "$COMMAND" in
+        "yaml-set")
+            yaml_set_command "${REMAINING_ARGS[@]}"
+            ;;
+        "yaml-delete")
+            yaml_delete_command "${REMAINING_ARGS[@]}"
+            ;;
+        "yaml-script")
+            yaml_script_command "${REMAINING_ARGS[@]}"
+            ;;
+        "file-patch")
+            file_patch_command "${REMAINING_ARGS[@]}"
+            ;;
+        "sed-replace")
+            sed_replace_command "${REMAINING_ARGS[@]}"
+            ;;
+        "hermetic")
+            hermetic_command "${REMAINING_ARGS[@]}"
+            ;;
+        "")
+            log_error "No command specified"
+            show_help
+            exit 1
+            ;;
+        *)
+            log_error "Unknown command: $COMMAND"
+            show_help
+            exit 1
+            ;;
+    esac
+}
+
+# Run main function if script is executed directly
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

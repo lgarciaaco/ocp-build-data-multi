@@ -1,0 +1,939 @@
+#!/usr/bin/env bash
+# OpenShift Build Data Multi-Version View Tool
+# View files and configurations across multiple OpenShift versions
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/common.sh"
+source "$SCRIPT_DIR/lib/git-utils.sh"
+source "$SCRIPT_DIR/lib/yaml-utils.sh"
+
+# Default values
+VERBOSE=false
+DEBUG=false
+OUTPUT_FORMAT="table"
+LINE_NUMBERS=false
+COMMAND=""
+
+# Help function
+show_help() {
+    cat << EOF
+OpenShift Build Data Multi-Version View Tool
+
+USAGE:
+    ocp-view [COMMAND] [OPTIONS] [VERSIONS]
+
+COMMANDS:
+    file <file-path> [versions]           View file across versions
+    yaml <file-path> <yaml-path> [versions]   View YAML value across versions
+    lines <file-path> <start>[-<end>] [versions]  View specific lines across versions
+    grep <pattern> <file-pattern> [versions]     Grep pattern across versions
+    find <name-pattern> [versions]       Find files matching pattern
+    summary [versions]                    Show summary of version differences
+
+OPTIONS:
+    -f, --format <format>     Output format: table, columns, json (default: table)
+    -n, --line-numbers        Show line numbers
+    -v, --verbose             Enable verbose output
+    -d, --debug               Enable debug output
+    -h, --help                Show this help message
+
+EXAMPLES:
+    # View a file across multiple versions
+    ocp-view file group.yml 4.17,4.20,4.21
+
+    # View YAML values in table format
+    ocp-view yaml group.yml ".vars.GO_LATEST" 4.17..4.21
+
+    # View specific lines from a file
+    ocp-view lines group.yml 10-20 all
+
+    # Search for patterns across versions
+    ocp-view grep "network_mode.*open" "images/*.yml" 4.19+
+
+    # Find files matching a pattern
+    ocp-view find "*etcd*" all
+
+    # Show summary of differences
+    ocp-view summary 4.17..4.21
+
+$(show_common_help)
+EOF
+}
+
+# Parse command line arguments
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            -f|--format)
+                OUTPUT_FORMAT="$2"
+                shift 2
+                ;;
+            -n|--line-numbers)
+                LINE_NUMBERS=true
+                shift
+                ;;
+            -v|--verbose)
+                VERBOSE=true
+                shift
+                ;;
+            -d|--debug)
+                DEBUG=true
+                export DEBUG=1
+                shift
+                ;;
+            file|yaml|lines|grep|find|summary)
+                COMMAND="$1"
+                shift
+                break
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                show_help
+                exit 1
+                ;;
+        esac
+    done
+    
+    # Store remaining arguments for command-specific parsing
+    REMAINING_ARGS=("$@")
+}
+
+# File view across versions
+file_view_command() {
+    local args=("$@")
+    
+    if [[ ${#args[@]} -lt 1 ]]; then
+        log_error "file command requires: <file-path> [versions]"
+        exit 1
+    fi
+    
+    local file_path="${args[0]}"
+    local versions_spec="${args[1]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Viewing $file_path across versions: ${versions[*]}"
+    echo
+    
+    case "$OUTPUT_FORMAT" in
+        "table")
+            show_file_table "$file_path" "${versions[@]}"
+            ;;
+        "columns")
+            show_file_columns "$file_path" "${versions[@]}"
+            ;;
+        "json")
+            show_file_json "$file_path" "${versions[@]}"
+            ;;
+        *)
+            log_error "Unknown output format: $OUTPUT_FORMAT"
+            exit 1
+            ;;
+    esac
+}
+
+# YAML value view across versions
+yaml_view_command() {
+    local args=("$@")
+    
+    if [[ ${#args[@]} -lt 2 ]]; then
+        log_error "yaml command requires: <file-path> <yaml-path> [versions]"
+        exit 1
+    fi
+    
+    local file_path="${args[0]}"
+    local yaml_path="${args[1]}"
+    local versions_spec="${args[2]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Viewing $yaml_path in $file_path across versions"
+    echo
+    
+    case "$OUTPUT_FORMAT" in
+        "table"|"columns")
+            yaml_compare "$file_path" "$yaml_path" "${versions[@]}"
+            ;;
+        "json")
+            show_yaml_json "$file_path" "$yaml_path" "${versions[@]}"
+            ;;
+        *)
+            log_error "Unknown output format: $OUTPUT_FORMAT"
+            exit 1
+            ;;
+    esac
+}
+
+# Specific lines view across versions
+lines_view_command() {
+    local args=("$@")
+    
+    if [[ ${#args[@]} -lt 2 ]]; then
+        log_error "lines command requires: <file-path> <start>[-<end>] [versions]"
+        exit 1
+    fi
+    
+    local file_path="${args[0]}"
+    local line_range="${args[1]}"
+    local versions_spec="${args[2]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    # Parse line range
+    local start_line end_line
+    if [[ "$line_range" == *"-"* ]]; then
+        start_line="${line_range%-*}"
+        end_line="${line_range#*-}"
+    else
+        start_line="$line_range"
+        end_line="$line_range"
+    fi
+    
+    log_info "Viewing lines $line_range of $file_path across versions: ${versions[*]}"
+    echo
+    
+    case "$OUTPUT_FORMAT" in
+        "table")
+            show_lines_table "$file_path" "$start_line" "$end_line" "${versions[@]}"
+            ;;
+        "columns")
+            show_lines_columns "$file_path" "$start_line" "$end_line" "${versions[@]}"
+            ;;
+        "json")
+            show_lines_json "$file_path" "$start_line" "$end_line" "${versions[@]}"
+            ;;
+        *)
+            log_error "Unknown output format: $OUTPUT_FORMAT"
+            exit 1
+            ;;
+    esac
+}
+
+# Grep pattern across versions
+grep_view_command() {
+    local args=("$@")
+    
+    if [[ ${#args[@]} -lt 2 ]]; then
+        log_error "grep command requires: <pattern> <file-pattern> [versions]"
+        exit 1
+    fi
+    
+    local pattern="${args[0]}"
+    local file_pattern="${args[1]}"
+    local versions_spec="${args[2]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Searching for '$pattern' in $file_pattern across versions: ${versions[*]}"
+    echo
+    
+    case "$OUTPUT_FORMAT" in
+        "table")
+            show_grep_table "$pattern" "$file_pattern" "${versions[@]}"
+            ;;
+        "columns")
+            show_grep_columns "$pattern" "$file_pattern" "${versions[@]}"
+            ;;
+        "json")
+            show_grep_json "$pattern" "$file_pattern" "${versions[@]}"
+            ;;
+        *)
+            log_error "Unknown output format: $OUTPUT_FORMAT"
+            exit 1
+            ;;
+    esac
+}
+
+# Find files matching pattern
+find_view_command() {
+    local args=("$@")
+    
+    if [[ ${#args[@]} -lt 1 ]]; then
+        log_error "find command requires: <name-pattern> [versions]"
+        exit 1
+    fi
+    
+    local name_pattern="${args[0]}"
+    local versions_spec="${args[1]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Finding files matching '$name_pattern' across versions: ${versions[*]}"
+    echo
+    
+    # Collect all matching files
+    local all_files=()
+    local temp_dir="$(mktemp -d)"
+    trap "rm -rf '$temp_dir'" EXIT
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        
+        if [[ -d "$version_dir" ]]; then
+            find "$version_dir" -name "$name_pattern" -type f | while read -r file; do
+                local relative_file="${file#$version_dir/}"
+                echo "$relative_file"
+            done > "$temp_dir/files_$version"
+        else
+            touch "$temp_dir/files_$version"
+        fi
+    done
+    
+    # Get unique file list
+    cat "$temp_dir"/files_* | sort -u > "$temp_dir/all_files"
+    
+    if [[ ! -s "$temp_dir/all_files" ]]; then
+        log_warning "No files found matching pattern '$name_pattern'"
+        return 0
+    fi
+    
+    case "$OUTPUT_FORMAT" in
+        "table"|"columns")
+            show_find_table "$temp_dir" "${versions[@]}"
+            ;;
+        "json")
+            show_find_json "$temp_dir" "${versions[@]}"
+            ;;
+        *)
+            log_error "Unknown output format: $OUTPUT_FORMAT"
+            exit 1
+            ;;
+    esac
+}
+
+# Summary view across versions
+summary_view_command() {
+    local args=("$@")
+    local versions_spec="${args[0]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Summary across versions: ${versions[*]}"
+    echo
+    
+    # Version information
+    echo "=== Version Information ==="
+    printf "%-8s %-12s %-12s %-15s %-10s\n" "VERSION" "GO_LATEST" "GO_EXTRA" "NETWORK_MODE" "STATUS"
+    printf "%-8s %-12s %-12s %-15s %-10s\n" "-------" "---------" "--------" "------------" "------"
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        
+        if [[ ! -d "$version_dir" ]]; then
+            printf "%-8s %-12s %-12s %-15s %-10s\n" "$version" "N/A" "N/A" "N/A" "Missing"
+            continue
+        fi
+        
+        local group_file="$version_dir/group.yml"
+        local go_latest="N/A"
+        local go_extra="N/A"
+        local network_mode="hermetic"
+        local status="Clean"
+        
+        if [[ -f "$group_file" ]]; then
+            local go_latest_val="$(yaml_get "$group_file" ".vars.GO_LATEST")"
+            local go_extra_val="$(yaml_get "$group_file" ".vars.GO_EXTRA")"
+            local network_mode_val="$(yaml_get "$group_file" ".konflux.network_mode")"
+            
+            [[ "$go_latest_val" != "null" ]] && go_latest="$go_latest_val"
+            [[ "$go_extra_val" != "null" ]] && go_extra="$go_extra_val"
+            [[ "$network_mode_val" != "null" ]] && network_mode="$network_mode_val"
+        fi
+        
+        # Check for uncommitted changes
+        local worktree_status="$(check_worktree_status "$version")"
+        [[ "$worktree_status" != "clean" ]] && status="$worktree_status"
+        
+        printf "%-8s %-12s %-12s %-15s %-10s\n" "$version" "$go_latest" "$go_extra" "$network_mode" "$status"
+    done
+    
+    echo
+    echo "=== File Counts ==="
+    printf "%-8s %-8s %-8s %-8s\n" "VERSION" "IMAGES" "RPMS" "TOTAL"
+    printf "%-8s %-8s %-8s %-8s\n" "-------" "------" "----" "-----"
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        local image_count="0"
+        local rpm_count="0"
+        local total_count="0"
+        
+        if [[ -d "$version_dir" ]]; then
+            [[ -d "$version_dir/images" ]] && image_count="$(find "$version_dir/images" -name "*.yml" -type f | wc -l | xargs)"
+            [[ -d "$version_dir/rpms" ]] && rpm_count="$(find "$version_dir/rpms" -name "*.yml" -type f | wc -l | xargs)"
+            total_count="$((image_count + rpm_count))"
+        fi
+        
+        printf "%-8s %-8s %-8s %-8s\n" "$version" "$image_count" "$rpm_count" "$total_count"
+    done
+    
+    echo
+    echo "=== Hermetic Conversion Status ==="
+    printf "%-8s %-15s %-20s\n" "VERSION" "OPEN_IMAGES" "HERMETIC_READY"
+    printf "%-8s %-15s %-20s\n" "-------" "-----------" "--------------"
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        local open_count="0"
+        local hermetic_ready="Unknown"
+        
+        if [[ -d "$version_dir/images" ]]; then
+            open_count="$(find "$version_dir/images" -name "*.yml" -type f -exec grep -l "network_mode: open" {} \; 2>/dev/null | wc -l | xargs)"
+            
+            if [[ "$open_count" -eq 0 ]]; then
+                hermetic_ready="Yes"
+            else
+                hermetic_ready="No ($open_count images)"
+            fi
+        fi
+        
+        printf "%-8s %-15s %-20s\n" "$version" "$open_count" "$hermetic_ready"
+    done
+}
+
+# Helper functions for different output formats
+
+show_file_table() {
+    local file_path="$1"
+    shift
+    local versions=("$@")
+    
+    # Find the file with the most lines to determine table size
+    local max_lines=0
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        local full_path="$version_dir/$file_path"
+        
+        if [[ -f "$full_path" ]]; then
+            local lines="$(wc -l < "$full_path")"
+            [[ $lines -gt $max_lines ]] && max_lines=$lines
+        fi
+    done
+    
+    if [[ $max_lines -eq 0 ]]; then
+        log_warning "File $file_path not found in any version"
+        return 1
+    fi
+    
+    # Calculate column width
+    local col_width=25
+    
+    # Print header
+    if [[ "$LINE_NUMBERS" == "true" ]]; then
+        printf "%-4s" "LINE"
+    fi
+    for version in "${versions[@]}"; do
+        printf " %-${col_width}s" "$version"
+    done
+    echo
+    
+    # Print separator
+    if [[ "$LINE_NUMBERS" == "true" ]]; then
+        printf "%-4s" "----"
+    fi
+    for version in "${versions[@]}"; do
+        printf " %-${col_width}s" "$(printf '%.0s-' $(seq 1 $col_width))"
+    done
+    echo
+    
+    # Print content
+    for (( line=1; line<=max_lines; line++ )); do
+        if [[ "$LINE_NUMBERS" == "true" ]]; then
+            printf "%-4d" "$line"
+        fi
+        
+        for version in "${versions[@]}"; do
+            local version_dir="$(get_version_dir "$version")"
+            local full_path="$version_dir/$file_path"
+            local content=""
+            
+            if [[ -f "$full_path" ]]; then
+                content="$(sed -n "${line}p" "$full_path" 2>/dev/null || echo "")"
+            fi
+            
+            # Truncate long lines
+            if [[ ${#content} -gt $col_width ]]; then
+                content="${content:0:$((col_width-3))}..."
+            fi
+            
+            printf " %-${col_width}s" "$content"
+        done
+        echo
+    done
+}
+
+show_file_columns() {
+    local file_path="$1"
+    shift
+    local versions=("$@")
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        local full_path="$version_dir/$file_path"
+        
+        echo "=== $version ==="
+        if [[ -f "$full_path" ]]; then
+            if [[ "$LINE_NUMBERS" == "true" ]]; then
+                cat -n "$full_path"
+            else
+                cat "$full_path"
+            fi
+        else
+            echo "(file not found)"
+        fi
+        echo
+    done
+}
+
+show_file_json() {
+    local file_path="$1"
+    shift
+    local versions=("$@")
+    
+    echo "{"
+    echo "  \"file\": \"$file_path\","
+    echo "  \"versions\": {"
+    
+    local first=true
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        local full_path="$version_dir/$file_path"
+        
+        [[ "$first" != "true" ]] && echo ","
+        first=false
+        
+        echo -n "    \"$version\": "
+        if [[ -f "$full_path" ]]; then
+            echo "{"
+            echo "      \"exists\": true,"
+            echo -n "      \"content\": "
+            # Escape JSON content
+            jq -Rs . < "$full_path"
+            echo "    }"
+        else
+            echo "{"
+            echo "      \"exists\": false,"
+            echo "      \"content\": null"
+            echo "    }"
+        fi
+    done
+    
+    echo
+    echo "  }"
+    echo "}"
+}
+
+show_yaml_json() {
+    local file_path="$1"
+    local yaml_path="$2"
+    shift 2
+    local versions=("$@")
+    
+    echo "{"
+    echo "  \"file\": \"$file_path\","
+    echo "  \"yaml_path\": \"$yaml_path\","
+    echo "  \"values\": {"
+    
+    local first=true
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        local full_path="$version_dir/$file_path"
+        
+        [[ "$first" != "true" ]] && echo ","
+        first=false
+        
+        echo -n "    \"$version\": "
+        if [[ -f "$full_path" ]]; then
+            local value="$(yaml_get "$full_path" "$yaml_path")"
+            if [[ "$value" == "null" ]]; then
+                echo "null"
+            else
+                echo "\"$value\""
+            fi
+        else
+            echo "null"
+        fi
+    done
+    
+    echo
+    echo "  }"
+    echo "}"
+}
+
+show_lines_table() {
+    local file_path="$1"
+    local start_line="$2"
+    local end_line="$3"
+    shift 3
+    local versions=("$@")
+    
+    local col_width=30
+    
+    # Print header
+    printf "%-4s" "LINE"
+    for version in "${versions[@]}"; do
+        printf " %-${col_width}s" "$version"
+    done
+    echo
+    
+    # Print separator
+    printf "%-4s" "----"
+    for version in "${versions[@]}"; do
+        printf " %-${col_width}s" "$(printf '%.0s-' $(seq 1 $col_width))"
+    done
+    echo
+    
+    # Print lines
+    for (( line=start_line; line<=end_line; line++ )); do
+        printf "%-4d" "$line"
+        
+        for version in "${versions[@]}"; do
+            local version_dir="$(get_version_dir "$version")"
+            local full_path="$version_dir/$file_path"
+            local content=""
+            
+            if [[ -f "$full_path" ]]; then
+                content="$(sed -n "${line}p" "$full_path" 2>/dev/null || echo "")"
+            fi
+            
+            # Truncate long lines
+            if [[ ${#content} -gt $col_width ]]; then
+                content="${content:0:$((col_width-3))}..."
+            fi
+            
+            printf " %-${col_width}s" "$content"
+        done
+        echo
+    done
+}
+
+show_lines_columns() {
+    local file_path="$1"
+    local start_line="$2"
+    local end_line="$3"
+    shift 3
+    local versions=("$@")
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        local full_path="$version_dir/$file_path"
+        
+        echo "=== $version (lines $start_line-$end_line) ==="
+        if [[ -f "$full_path" ]]; then
+            sed -n "${start_line},${end_line}p" "$full_path" | if [[ "$LINE_NUMBERS" == "true" ]]; then
+                cat -n
+            else
+                cat
+            fi
+        else
+            echo "(file not found)"
+        fi
+        echo
+    done
+}
+
+show_lines_json() {
+    local file_path="$1"
+    local start_line="$2"
+    local end_line="$3"
+    shift 3
+    local versions=("$@")
+    
+    echo "{"
+    echo "  \"file\": \"$file_path\","
+    echo "  \"lines\": \"$start_line-$end_line\","
+    echo "  \"versions\": {"
+    
+    local first=true
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        local full_path="$version_dir/$file_path"
+        
+        [[ "$first" != "true" ]] && echo ","
+        first=false
+        
+        echo "    \"$version\": {"
+        if [[ -f "$full_path" ]]; then
+            echo "      \"exists\": true,"
+            echo "      \"lines\": ["
+            
+            local line_first=true
+            for (( line=start_line; line<=end_line; line++ )); do
+                local content="$(sed -n "${line}p" "$full_path" 2>/dev/null || echo "")"
+                
+                [[ "$line_first" != "true" ]] && echo ","
+                line_first=false
+                
+                echo -n "        "
+                echo -n "$content" | jq -Rs .
+            done
+            
+            echo
+            echo "      ]"
+        else
+            echo "      \"exists\": false,"
+            echo "      \"lines\": []"
+        fi
+        echo "    }"
+    done
+    
+    echo "  }"
+    echo "}"
+}
+
+show_grep_table() {
+    local pattern="$1"
+    local file_pattern="$2"
+    shift 2
+    local versions=("$@")
+    
+    printf "%-8s %-30s %-6s %s\n" "VERSION" "FILE" "LINE" "CONTENT"
+    printf "%-8s %-30s %-6s %s\n" "-------" "------------------------------" "----" "-------"
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        
+        if [[ -d "$version_dir" ]]; then
+            find "$version_dir" -name "$file_pattern" -type f | while read -r file; do
+                local relative_file="${file#$version_dir/}"
+                
+                grep -n "$pattern" "$file" 2>/dev/null | while IFS=: read -r line_num content; do
+                    # Truncate long content
+                    if [[ ${#content} -gt 50 ]]; then
+                        content="${content:0:47}..."
+                    fi
+                    
+                    printf "%-8s %-30s %-6s %s\n" "$version" "$(basename "$relative_file")" "$line_num" "$content"
+                done
+            done
+        fi
+    done
+}
+
+show_grep_columns() {
+    local pattern="$1"
+    local file_pattern="$2"
+    shift 2
+    local versions=("$@")
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        
+        echo "=== $version ==="
+        if [[ -d "$version_dir" ]]; then
+            find "$version_dir" -name "$file_pattern" -type f | while read -r file; do
+                local relative_file="${file#$version_dir/}"
+                
+                local matches="$(grep -n "$pattern" "$file" 2>/dev/null || true)"
+                if [[ -n "$matches" ]]; then
+                    echo "  $relative_file:"
+                    echo "$matches" | while IFS=: read -r line_num content; do
+                        echo "    $line_num: $content"
+                    done
+                fi
+            done
+        else
+            echo "  (worktree not found)"
+        fi
+        echo
+    done
+}
+
+show_grep_json() {
+    local pattern="$1"
+    local file_pattern="$2"
+    shift 2
+    local versions=("$@")
+    
+    echo "{"
+    echo "  \"pattern\": \"$pattern\","
+    echo "  \"file_pattern\": \"$file_pattern\","
+    echo "  \"results\": {"
+    
+    local first=true
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        
+        [[ "$first" != "true" ]] && echo ","
+        first=false
+        
+        echo "    \"$version\": ["
+        
+        if [[ -d "$version_dir" ]]; then
+            local file_first=true
+            find "$version_dir" -name "$file_pattern" -type f | while read -r file; do
+                local relative_file="${file#$version_dir/}"
+                
+                grep -n "$pattern" "$file" 2>/dev/null | while IFS=: read -r line_num content; do
+                    [[ "$file_first" != "true" ]] && echo ","
+                    file_first=false
+                    
+                    echo "      {"
+                    echo "        \"file\": \"$relative_file\","
+                    echo "        \"line\": $line_num,"
+                    echo -n "        \"content\": "
+                    echo "$content" | jq -Rs .
+                    echo "      }"
+                done
+            done
+        fi
+        
+        echo "    ]"
+    done
+    
+    echo "  }"
+    echo "}"
+}
+
+show_find_table() {
+    local temp_dir="$1"
+    shift
+    local versions=("$@")
+    
+    printf "%-40s" "FILE"
+    for version in "${versions[@]}"; do
+        printf " %-8s" "$version"
+    done
+    echo
+    
+    printf "%-40s" "----"
+    for version in "${versions[@]}"; do
+        printf " %-8s" "--------"
+    done
+    echo
+    
+    while IFS= read -r file; do
+        local basename_file="$(basename "$file")"
+        printf "%-40s" "$basename_file"
+        
+        for version in "${versions[@]}"; do
+            if grep -q "^$file$" "$temp_dir/files_$version" 2>/dev/null; then
+                printf " %-8s" "✓"
+            else
+                printf " %-8s" "✗"
+            fi
+        done
+        echo
+    done < "$temp_dir/all_files"
+}
+
+show_find_json() {
+    local temp_dir="$1"
+    shift
+    local versions=("$@")
+    
+    echo "{"
+    echo "  \"files\": ["
+    
+    local first=true
+    while IFS= read -r file; do
+        [[ "$first" != "true" ]] && echo ","
+        first=false
+        
+        echo "    {"
+        echo "      \"path\": \"$file\","
+        echo "      \"versions\": {"
+        
+        local version_first=true
+        for version in "${versions[@]}"; do
+            [[ "$version_first" != "true" ]] && echo ","
+            version_first=false
+            
+            local exists="false"
+            if grep -q "^$file$" "$temp_dir/files_$version" 2>/dev/null; then
+                exists="true"
+            fi
+            
+            echo "        \"$version\": $exists"
+        done
+        
+        echo "      }"
+        echo "    }"
+    done < "$temp_dir/all_files"
+    
+    echo "  ]"
+    echo "}"
+}
+
+# Main function
+main() {
+    # Check dependencies
+    if ! check_dependencies; then
+        exit 1
+    fi
+    
+    # Parse command line arguments
+    parse_args "$@"
+    
+    # Set verbose mode
+    if [[ "$VERBOSE" == "true" ]]; then
+        set -x
+    fi
+    
+    # Execute command
+    case "$COMMAND" in
+        "file")
+            file_view_command "${REMAINING_ARGS[@]}"
+            ;;
+        "yaml")
+            yaml_view_command "${REMAINING_ARGS[@]}"
+            ;;
+        "lines")
+            lines_view_command "${REMAINING_ARGS[@]}"
+            ;;
+        "grep")
+            grep_view_command "${REMAINING_ARGS[@]}"
+            ;;
+        "find")
+            find_view_command "${REMAINING_ARGS[@]}"
+            ;;
+        "summary")
+            summary_view_command "${REMAINING_ARGS[@]}"
+            ;;
+        "")
+            log_error "No command specified"
+            show_help
+            exit 1
+            ;;
+        *)
+            log_error "Unknown command: $COMMAND"
+            show_help
+            exit 1
+            ;;
+    esac
+}
+
+# Run main function if script is executed directly
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

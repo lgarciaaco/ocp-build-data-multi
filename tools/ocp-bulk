@@ -1,0 +1,625 @@
+#!/usr/bin/env bash
+# OpenShift Build Data Multi-Version Bulk Operations Tool
+# Perform bulk operations across multiple OpenShift versions
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/common.sh"
+source "$SCRIPT_DIR/lib/git-utils.sh"
+source "$SCRIPT_DIR/lib/yaml-utils.sh"
+
+# Default values
+DRY_RUN=false
+VERBOSE=false
+DEBUG=false
+FORCE=false
+COMMAND=""
+
+# Help function
+show_help() {
+    cat << EOF
+OpenShift Build Data Multi-Version Bulk Operations Tool
+
+USAGE:
+    ocp-bulk [COMMAND] [OPTIONS] [VERSIONS]
+
+COMMANDS:
+    commit <message> [versions]           Commit changes across versions
+    push [branch] [versions]              Push changes to personal remote
+    branch <branch-name> [versions]       Create new branch across versions
+    checkout <branch> [versions]          Checkout branch across versions
+    status [versions]                     Show git status across versions
+    pull [versions]                       Pull latest changes across versions
+    reset [--hard] [versions]             Reset changes across versions
+    clean [versions]                      Clean untracked files across versions
+    validate [versions]                   Validate YAML syntax across versions
+
+OPTIONS:
+    --dry-run             Show what would be done without making changes
+    -f, --force           Force operation (overwrite existing branches, etc.)
+    -v, --verbose         Enable verbose output
+    -d, --debug           Enable debug output
+    -h, --help            Show this help message
+
+EXAMPLES:
+    # Commit changes across multiple versions
+    ocp-bulk commit "Remove network_mode for hermetic builds" 4.19,4.20,4.21
+
+    # Push all changes to personal remote
+    ocp-bulk push 4.19+
+
+    # Create a new branch across versions
+    ocp-bulk branch hermetic-conversion 4.19,4.20,4.21
+
+    # Check status across all versions
+    ocp-bulk status all
+
+    # Pull latest changes for specific versions
+    ocp-bulk pull 4.20,4.21
+
+    # Validate YAML syntax across versions
+    ocp-bulk validate all
+
+    # Reset hard across versions (WARNING: destructive)
+    ocp-bulk reset --hard 4.19,4.20
+
+$(show_common_help)
+EOF
+}
+
+# Parse command line arguments
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            --dry-run)
+                DRY_RUN=true
+                export DRY_RUN=true
+                shift
+                ;;
+            -f|--force)
+                FORCE=true
+                shift
+                ;;
+            -v|--verbose)
+                VERBOSE=true
+                shift
+                ;;
+            -d|--debug)
+                DEBUG=true
+                export DEBUG=1
+                shift
+                ;;
+            commit|push|branch|checkout|status|pull|reset|clean|validate)
+                COMMAND="$1"
+                shift
+                break
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                show_help
+                exit 1
+                ;;
+        esac
+    done
+    
+    # Store remaining arguments for command-specific parsing
+    REMAINING_ARGS=("$@")
+}
+
+# Commit changes across versions
+commit_command() {
+    local args=("$@")
+    
+    if [[ ${#args[@]} -lt 1 ]]; then
+        log_error "commit command requires: <message> [versions]"
+        exit 1
+    fi
+    
+    local message="${args[0]}"
+    local versions_spec="${args[1]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Committing changes across versions: ${versions[*]}"
+    log_info "Commit message: $message"
+    
+    local success_count=0
+    local total_count=${#versions[@]}
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        
+        if [[ ! -d "$version_dir" ]]; then
+            log_warning "Worktree for version $version does not exist, skipping"
+            continue
+        fi
+        
+        log_info "Processing version $version..."
+        
+        if [[ "$DRY_RUN" == "true" ]]; then
+            (
+                cd "$version_dir"
+                if ! git diff-index --quiet HEAD --; then
+                    echo "  Would commit changes in version $version"
+                    git status --porcelain
+                else
+                    echo "  No changes to commit in version $version"
+                fi
+            )
+            continue
+        fi
+        
+        if commit_changes "$version" "$message"; then
+            ((success_count++))
+        fi
+    done
+    
+    if [[ "$DRY_RUN" != "true" ]]; then
+        log_info "Committed changes in $success_count of $total_count versions"
+    fi
+}
+
+# Push changes across versions
+push_command() {
+    local args=("$@")
+    local branch_name="${args[0]:-}"
+    local versions_spec="${args[1]:-all}"
+    
+    # If first arg looks like a version spec, treat it as versions
+    if [[ "$branch_name" =~ ^[0-9] ]] || [[ "$branch_name" == "all" ]]; then
+        versions_spec="$branch_name"
+        branch_name=""
+    fi
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Pushing changes across versions: ${versions[*]}"
+    
+    local success_count=0
+    local total_count=${#versions[@]}
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        
+        if [[ ! -d "$version_dir" ]]; then
+            log_warning "Worktree for version $version does not exist, skipping"
+            continue
+        fi
+        
+        log_info "Processing version $version..."
+        
+        if [[ "$DRY_RUN" == "true" ]]; then
+            local current_branch="$(git -C "$version_dir" branch --show-current 2>/dev/null || echo "unknown")"
+            local push_branch="${branch_name:-$current_branch}"
+            echo "  Would push $push_branch from version $version to $PERSONAL_REMOTE"
+            continue
+        fi
+        
+        if push_changes "$version" "$branch_name"; then
+            ((success_count++))
+        fi
+    done
+    
+    if [[ "$DRY_RUN" != "true" ]]; then
+        log_info "Pushed changes from $success_count of $total_count versions"
+    fi
+}
+
+# Create branch across versions
+branch_command() {
+    local args=("$@")
+    
+    if [[ ${#args[@]} -lt 1 ]]; then
+        log_error "branch command requires: <branch-name> [versions]"
+        exit 1
+    fi
+    
+    local branch_name="${args[0]}"
+    local versions_spec="${args[1]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Creating branch '$branch_name' across versions: ${versions[*]}"
+    
+    local success_count=0
+    local total_count=${#versions[@]}
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        
+        if [[ ! -d "$version_dir" ]]; then
+            log_warning "Worktree for version $version does not exist, skipping"
+            continue
+        fi
+        
+        log_info "Processing version $version..."
+        
+        if [[ "$DRY_RUN" == "true" ]]; then
+            echo "  Would create branch $branch_name in version $version"
+            continue
+        fi
+        
+        if create_branch "$version" "$branch_name"; then
+            ((success_count++))
+        fi
+    done
+    
+    if [[ "$DRY_RUN" != "true" ]]; then
+        log_info "Created branch in $success_count of $total_count versions"
+    fi
+}
+
+# Checkout branch across versions
+checkout_command() {
+    local args=("$@")
+    
+    if [[ ${#args[@]} -lt 1 ]]; then
+        log_error "checkout command requires: <branch> [versions]"
+        exit 1
+    fi
+    
+    local branch_name="${args[0]}"
+    local versions_spec="${args[1]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Checking out branch '$branch_name' across versions: ${versions[*]}"
+    
+    local success_count=0
+    local total_count=${#versions[@]}
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        
+        if [[ ! -d "$version_dir" ]]; then
+            log_warning "Worktree for version $version does not exist, skipping"
+            continue
+        fi
+        
+        log_info "Processing version $version..."
+        
+        if [[ "$DRY_RUN" == "true" ]]; then
+            echo "  Would checkout branch $branch_name in version $version"
+            continue
+        fi
+        
+        (
+            cd "$version_dir"
+            
+            if git checkout "$branch_name" 2>/dev/null; then
+                log_success "Checked out branch $branch_name in version $version"
+                ((success_count++))
+            else
+                log_error "Failed to checkout branch $branch_name in version $version"
+            fi
+        )
+    done
+    
+    if [[ "$DRY_RUN" != "true" ]]; then
+        log_info "Checked out branch in $success_count of $total_count versions"
+    fi
+}
+
+# Show status across versions
+status_command() {
+    local args=("$@")
+    local versions_spec="${args[0]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Git status across versions: ${versions[*]}"
+    echo
+    
+    show_worktree_status "${versions[@]}"
+}
+
+# Pull latest changes across versions
+pull_command() {
+    local args=("$@")
+    local versions_spec="${args[0]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Pulling latest changes across versions: ${versions[*]}"
+    
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log_info "Would update worktrees for versions: ${versions[*]}"
+        return 0
+    fi
+    
+    update_worktrees "${versions[@]}"
+}
+
+# Reset changes across versions
+reset_command() {
+    local args=("$@")
+    local hard_reset=false
+    local versions_spec=""
+    
+    # Parse arguments
+    if [[ ${#args[@]} -gt 0 && "${args[0]}" == "--hard" ]]; then
+        hard_reset=true
+        versions_spec="${args[1]:-all}"
+    else
+        versions_spec="${args[0]:-all}"
+    fi
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    if [[ "$hard_reset" == "true" ]]; then
+        log_warning "Hard reset will permanently lose uncommitted changes!"
+        if [[ "$FORCE" != "true" ]]; then
+            read -p "Are you sure you want to continue? (y/N): " -r
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                log_info "Operation cancelled"
+                return 0
+            fi
+        fi
+    fi
+    
+    log_info "Resetting changes across versions: ${versions[*]}"
+    
+    local success_count=0
+    local total_count=${#versions[@]}
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        
+        if [[ ! -d "$version_dir" ]]; then
+            log_warning "Worktree for version $version does not exist, skipping"
+            continue
+        fi
+        
+        log_info "Processing version $version..."
+        
+        if [[ "$DRY_RUN" == "true" ]]; then
+            if [[ "$hard_reset" == "true" ]]; then
+                echo "  Would perform hard reset in version $version"
+            else
+                echo "  Would reset staged changes in version $version"
+            fi
+            continue
+        fi
+        
+        (
+            cd "$version_dir"
+            
+            if [[ "$hard_reset" == "true" ]]; then
+                if git reset --hard HEAD; then
+                    log_success "Hard reset completed in version $version"
+                    ((success_count++))
+                else
+                    log_error "Failed to reset in version $version"
+                fi
+            else
+                if git reset HEAD .; then
+                    log_success "Reset staged changes in version $version"
+                    ((success_count++))
+                else
+                    log_error "Failed to reset in version $version"
+                fi
+            fi
+        )
+    done
+    
+    if [[ "$DRY_RUN" != "true" ]]; then
+        log_info "Reset completed in $success_count of $total_count versions"
+    fi
+}
+
+# Clean untracked files across versions
+clean_command() {
+    local args=("$@")
+    local versions_spec="${args[0]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_warning "Clean will remove untracked files!"
+    if [[ "$FORCE" != "true" ]]; then
+        read -p "Are you sure you want to continue? (y/N): " -r
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            log_info "Operation cancelled"
+            return 0
+        fi
+    fi
+    
+    log_info "Cleaning untracked files across versions: ${versions[*]}"
+    
+    local success_count=0
+    local total_count=${#versions[@]}
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        
+        if [[ ! -d "$version_dir" ]]; then
+            log_warning "Worktree for version $version does not exist, skipping"
+            continue
+        fi
+        
+        log_info "Processing version $version..."
+        
+        if [[ "$DRY_RUN" == "true" ]]; then
+            (
+                cd "$version_dir"
+                local untracked="$(git ls-files --others --exclude-standard)"
+                if [[ -n "$untracked" ]]; then
+                    echo "  Would remove untracked files in version $version:"
+                    echo "$untracked" | sed 's/^/    /'
+                else
+                    echo "  No untracked files in version $version"
+                fi
+            )
+            continue
+        fi
+        
+        (
+            cd "$version_dir"
+            
+            if git clean -fd; then
+                log_success "Cleaned untracked files in version $version"
+                ((success_count++))
+            else
+                log_error "Failed to clean files in version $version"
+            fi
+        )
+    done
+    
+    if [[ "$DRY_RUN" != "true" ]]; then
+        log_info "Cleaned files in $success_count of $total_count versions"
+    fi
+}
+
+# Validate YAML syntax across versions
+validate_command() {
+    local args=("$@")
+    local versions_spec="${args[0]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Validating YAML syntax across versions: ${versions[*]}"
+    
+    local total_files=0
+    local valid_files=0
+    local invalid_files=0
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        
+        if [[ ! -d "$version_dir" ]]; then
+            log_warning "Worktree for version $version does not exist, skipping"
+            continue
+        fi
+        
+        log_info "Validating version $version..."
+        
+        find "$version_dir" -name "*.yml" -o -name "*.yaml" | while read -r file; do
+            local relative_path="${file#$version_dir/}"
+            ((total_files++))
+            
+            if yaml_validate "$file"; then
+                ((valid_files++))
+                log_debug "  ✓ $relative_path"
+            else
+                ((invalid_files++))
+                log_error "  ✗ $relative_path"
+            fi
+        done
+    done
+    
+    echo
+    log_info "Validation summary:"
+    log_info "  Total files: $total_files"
+    log_info "  Valid files: $valid_files"
+    log_info "  Invalid files: $invalid_files"
+    
+    if [[ $invalid_files -gt 0 ]]; then
+        log_error "Found $invalid_files files with invalid YAML syntax"
+        return 1
+    else
+        log_success "All YAML files have valid syntax"
+        return 0
+    fi
+}
+
+# Main function
+main() {
+    # Check dependencies
+    if ! check_dependencies; then
+        exit 1
+    fi
+    
+    # Parse command line arguments
+    parse_args "$@"
+    
+    # Set verbose mode
+    if [[ "$VERBOSE" == "true" ]]; then
+        set -x
+    fi
+    
+    # Execute command
+    case "$COMMAND" in
+        "commit")
+            commit_command "${REMAINING_ARGS[@]}"
+            ;;
+        "push")
+            push_command "${REMAINING_ARGS[@]}"
+            ;;
+        "branch")
+            branch_command "${REMAINING_ARGS[@]}"
+            ;;
+        "checkout")
+            checkout_command "${REMAINING_ARGS[@]}"
+            ;;
+        "status")
+            status_command "${REMAINING_ARGS[@]}"
+            ;;
+        "pull")
+            pull_command "${REMAINING_ARGS[@]}"
+            ;;
+        "reset")
+            reset_command "${REMAINING_ARGS[@]}"
+            ;;
+        "clean")
+            clean_command "${REMAINING_ARGS[@]}"
+            ;;
+        "validate")
+            validate_command "${REMAINING_ARGS[@]}"
+            ;;
+        "")
+            log_error "No command specified"
+            show_help
+            exit 1
+            ;;
+        *)
+            log_error "Unknown command: $COMMAND"
+            show_help
+            exit 1
+            ;;
+    esac
+}
+
+# Run main function if script is executed directly
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

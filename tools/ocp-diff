@@ -1,0 +1,591 @@
+#!/usr/bin/env bash
+# OpenShift Build Data Multi-Version Diff Tool
+# Compare files and configurations across multiple OpenShift versions
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/common.sh"
+source "$SCRIPT_DIR/lib/git-utils.sh"
+source "$SCRIPT_DIR/lib/yaml-utils.sh"
+
+# Default values
+VERBOSE=false
+DEBUG=false
+OUTPUT_FORMAT="side-by-side"
+CONTEXT_LINES=3
+IGNORE_WHITESPACE=false
+COMMAND=""
+
+# Help function
+show_help() {
+    cat << EOF
+OpenShift Build Data Multi-Version Diff Tool
+
+USAGE:
+    ocp-diff [COMMAND] [OPTIONS] [VERSIONS]
+
+COMMANDS:
+    file <file-path> [versions]           Compare file across versions
+    yaml <file-path> <yaml-path> [versions]   Compare YAML value across versions
+    golang-versions [versions]            Compare golang versions across versions
+    network-modes [versions]              Compare network modes across versions
+    hermetic-status [versions]            Show hermetic conversion status
+    directory <dir-path> [versions]       Compare directory contents
+
+OPTIONS:
+    -f, --format <format>     Output format: side-by-side, unified, table (default: side-by-side)
+    -c, --context <lines>     Number of context lines for diffs (default: 3)
+    -w, --ignore-whitespace   Ignore whitespace differences
+    -v, --verbose             Enable verbose output
+    -d, --debug               Enable debug output
+    -h, --help                Show this help message
+
+EXAMPLES:
+    # Compare a specific file across versions
+    ocp-diff file group.yml 4.17,4.20,4.21
+
+    # Compare YAML values across versions
+    ocp-diff yaml group.yml ".vars.GO_LATEST" 4.17..4.21
+
+    # Check golang versions across all active versions
+    ocp-diff golang-versions
+
+    # Compare network modes for hermetic conversion
+    ocp-diff network-modes 4.19+
+
+    # Show hermetic conversion status
+    ocp-diff hermetic-status all
+
+    # Compare directory contents
+    ocp-diff directory images/ 4.20,4.21
+
+$(show_common_help)
+EOF
+}
+
+# Parse command line arguments
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            -f|--format)
+                OUTPUT_FORMAT="$2"
+                shift 2
+                ;;
+            -c|--context)
+                CONTEXT_LINES="$2"
+                shift 2
+                ;;
+            -w|--ignore-whitespace)
+                IGNORE_WHITESPACE=true
+                shift
+                ;;
+            -v|--verbose)
+                VERBOSE=true
+                shift
+                ;;
+            -d|--debug)
+                DEBUG=true
+                export DEBUG=1
+                shift
+                ;;
+            file|yaml|golang-versions|network-modes|hermetic-status|directory)
+                COMMAND="$1"
+                shift
+                break
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                show_help
+                exit 1
+                ;;
+        esac
+    done
+    
+    # Store remaining arguments for command-specific parsing
+    REMAINING_ARGS=("$@")
+}
+
+# File comparison across versions
+file_diff_command() {
+    local args=("$@")
+    
+    if [[ ${#args[@]} -lt 1 ]]; then
+        log_error "file command requires: <file-path> [versions]"
+        exit 1
+    fi
+    
+    local file_path="${args[0]}"
+    local versions_spec="${args[1]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Comparing $file_path across versions: ${versions[*]}"
+    
+    # Create temporary files for comparison
+    local temp_dir="$(mktemp -d)"
+    trap "rm -rf '$temp_dir'" EXIT
+    
+    local available_versions=()
+    
+    # Copy files to temp directory
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        local full_path="$version_dir/$file_path"
+        
+        if [[ -f "$full_path" ]]; then
+            cp "$full_path" "$temp_dir/$version"
+            available_versions+=("$version")
+        else
+            log_warning "File $file_path not found in version $version"
+        fi
+    done
+    
+    if [[ ${#available_versions[@]} -lt 2 ]]; then
+        log_error "Need at least 2 versions with the file to compare"
+        exit 1
+    fi
+    
+    # Generate comparison based on format
+    case "$OUTPUT_FORMAT" in
+        "side-by-side")
+            show_side_by_side_diff "$temp_dir" "${available_versions[@]}"
+            ;;
+        "unified")
+            show_unified_diff "$temp_dir" "${available_versions[@]}"
+            ;;
+        "table")
+            show_table_diff "$temp_dir" "${available_versions[@]}"
+            ;;
+        *)
+            log_error "Unknown output format: $OUTPUT_FORMAT"
+            exit 1
+            ;;
+    esac
+}
+
+# YAML value comparison across versions
+yaml_diff_command() {
+    local args=("$@")
+    
+    if [[ ${#args[@]} -lt 2 ]]; then
+        log_error "yaml command requires: <file-path> <yaml-path> [versions]"
+        exit 1
+    fi
+    
+    local file_path="${args[0]}"
+    local yaml_path="${args[1]}"
+    local versions_spec="${args[2]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Comparing $yaml_path in $file_path across versions"
+    echo
+    
+    yaml_compare "$file_path" "$yaml_path" "${versions[@]}"
+}
+
+# Golang version comparison
+golang_versions_command() {
+    local args=("$@")
+    local versions_spec="${args[0]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Comparing golang versions across versions"
+    echo
+    
+    printf "%-8s %-12s %-12s\n" "VERSION" "GO_LATEST" "GO_EXTRA"
+    printf "%-8s %-12s %-12s\n" "-------" "---------" "--------"
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        local group_file="$version_dir/group.yml"
+        
+        if [[ -f "$group_file" ]]; then
+            local go_latest="$(yaml_get "$group_file" ".vars.GO_LATEST")"
+            local go_extra="$(yaml_get "$group_file" ".vars.GO_EXTRA")"
+            
+            [[ "$go_latest" == "null" ]] && go_latest="(not set)"
+            [[ "$go_extra" == "null" ]] && go_extra="(not set)"
+            
+            printf "%-8s %-12s %-12s\n" "$version" "$go_latest" "$go_extra"
+        else
+            printf "%-8s %-12s %-12s\n" "$version" "N/A" "N/A"
+        fi
+    done
+}
+
+# Network modes comparison for hermetic conversion
+network_modes_command() {
+    local args=("$@")
+    local versions_spec="${args[0]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Comparing network modes across versions (for hermetic conversion)"
+    echo
+    
+    printf "%-8s %-12s %-15s %s\n" "VERSION" "DEFAULT" "OPEN_IMAGES" "HERMETIC_READY"
+    printf "%-8s %-12s %-15s %s\n" "-------" "-------" "-----------" "--------------"
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        
+        if [[ ! -d "$version_dir" ]]; then
+            printf "%-8s %-12s %-15s %s\n" "$version" "N/A" "N/A" "N/A"
+            continue
+        fi
+        
+        # Get default network mode from group.yml
+        local group_file="$version_dir/group.yml"
+        local default_mode="hermetic"
+        
+        if [[ -f "$group_file" ]]; then
+            local konflux_mode="$(yaml_get "$group_file" ".konflux.network_mode")"
+            [[ "$konflux_mode" != "null" ]] && default_mode="$konflux_mode"
+        fi
+        
+        # Count images with network_mode: open
+        local open_count=0
+        if [[ -d "$version_dir/images" ]]; then
+            open_count="$(find "$version_dir/images" -name "*.yml" -type f -exec grep -l "network_mode: open" {} \; 2>/dev/null | wc -l | xargs)"
+        fi
+        
+        # Determine if ready for hermetic
+        local hermetic_ready="Yes"
+        [[ "$default_mode" != "hermetic" ]] && hermetic_ready="No (default not hermetic)"
+        [[ "$open_count" -gt 0 ]] && hermetic_ready="No ($open_count images with open mode)"
+        [[ "$default_mode" == "hermetic" && "$open_count" -eq 0 ]] && hermetic_ready="Yes"
+        
+        printf "%-8s %-12s %-15s %s\n" "$version" "$default_mode" "$open_count" "$hermetic_ready"
+    done
+}
+
+# Hermetic conversion status
+hermetic_status_command() {
+    local args=("$@")
+    local versions_spec="${args[0]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Hermetic conversion status across versions"
+    echo
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        
+        if [[ ! -d "$version_dir" ]]; then
+            log_warning "Version $version: Worktree not found"
+            continue
+        fi
+        
+        echo "=== Version $version ==="
+        
+        # Check default network mode
+        local group_file="$version_dir/group.yml"
+        if [[ -f "$group_file" ]]; then
+            local default_mode="$(yaml_get "$group_file" ".konflux.network_mode")"
+            if [[ "$default_mode" == "null" ]]; then
+                echo "  Default mode: hermetic (implicit)"
+            else
+                echo "  Default mode: $default_mode"
+            fi
+        else
+            echo "  Default mode: unknown (no group.yml)"
+        fi
+        
+        # Find images that still have network_mode: open
+        echo "  Images with network_mode: open:"
+        if [[ -d "$version_dir/images" ]]; then
+            local found_open=false
+            find "$version_dir/images" -name "*.yml" -type f | while read -r file; do
+                if yaml_has "$file" ".konflux.network_mode"; then
+                    local mode="$(yaml_get "$file" ".konflux.network_mode")"
+                    if [[ "$mode" == "open" ]]; then
+                        local filename="$(basename "$file" .yml)"
+                        echo "    - $filename"
+                        found_open=true
+                    fi
+                fi
+            done
+            
+            if ! $found_open; then
+                echo "    (none - ready for hermetic builds)"
+            fi
+        else
+            echo "    (no images directory)"
+        fi
+        
+        # Check for missing lockfiles
+        echo "  Images missing cachi2 lockfiles:"
+        if [[ -d "$version_dir/images" ]]; then
+            local found_missing=false
+            find "$version_dir/images" -name "*.yml" -type f | while read -r file; do
+                local network_mode="$(yaml_get "$file" ".konflux.network_mode")"
+                local has_lockfile="$(yaml_has "$file" ".konflux.cachi2.lockfile")"
+                
+                # If no explicit network_mode, it defaults to hermetic
+                if [[ "$network_mode" == "null" || "$network_mode" == "hermetic" ]]; then
+                    if ! $has_lockfile; then
+                        local filename="$(basename "$file" .yml)"
+                        echo "    - $filename (may need lockfile for hermetic build)"
+                        found_missing=true
+                    fi
+                fi
+            done
+            
+            if ! $found_missing; then
+                echo "    (all hermetic images have lockfiles or don't need them)"
+            fi
+        fi
+        
+        echo
+    done
+}
+
+# Directory comparison across versions
+directory_diff_command() {
+    local args=("$@")
+    
+    if [[ ${#args[@]} -lt 1 ]]; then
+        log_error "directory command requires: <dir-path> [versions]"
+        exit 1
+    fi
+    
+    local dir_path="${args[0]}"
+    local versions_spec="${args[1]:-all}"
+    
+    if [[ "$versions_spec" == "all" ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    else
+        readarray -t versions < <(parse_version_range "$versions_spec")
+    fi
+    
+    log_info "Comparing directory $dir_path across versions: ${versions[*]}"
+    echo
+    
+    # Collect all unique files across versions
+    local all_files=()
+    local temp_dir="$(mktemp -d)"
+    trap "rm -rf '$temp_dir'" EXIT
+    
+    for version in "${versions[@]}"; do
+        local version_dir="$(get_version_dir "$version")"
+        local full_dir="$version_dir/$dir_path"
+        
+        if [[ -d "$full_dir" ]]; then
+            find "$full_dir" -type f -name "*.yml" | while read -r file; do
+                local relative_file="${file#$full_dir/}"
+                echo "$relative_file"
+            done > "$temp_dir/files_$version"
+        else
+            touch "$temp_dir/files_$version"
+        fi
+    done
+    
+    # Get unique file list
+    cat "$temp_dir"/files_* | sort -u > "$temp_dir/all_files"
+    
+    # Create comparison table
+    printf "%-30s" "FILE"
+    for version in "${versions[@]}"; do
+        printf " %-8s" "$version"
+    done
+    echo
+    
+    printf "%-30s" "----"
+    for version in "${versions[@]}"; do
+        printf " %-8s" "--------"
+    done
+    echo
+    
+    while IFS= read -r file; do
+        printf "%-30s" "$(basename "$file")"
+        
+        for version in "${versions[@]}"; do
+            local version_dir="$(get_version_dir "$version")"
+            local full_file="$version_dir/$dir_path/$file"
+            
+            if [[ -f "$full_file" ]]; then
+                printf " %-8s" "✓"
+            else
+                printf " %-8s" "✗"
+            fi
+        done
+        echo
+    done < "$temp_dir/all_files"
+}
+
+# Helper functions for different output formats
+show_side_by_side_diff() {
+    local temp_dir="$1"
+    shift
+    local versions=("$@")
+    
+    if [[ ${#versions[@]} -eq 2 ]]; then
+        local diff_opts="-y"
+        [[ "$IGNORE_WHITESPACE" == "true" ]] && diff_opts="$diff_opts -w"
+        
+        echo "=== ${versions[0]} vs ${versions[1]} ==="
+        diff $diff_opts "$temp_dir/${versions[0]}" "$temp_dir/${versions[1]}" || true
+    else
+        # For more than 2 versions, show each pair
+        for (( i=0; i<${#versions[@]}-1; i++ )); do
+            for (( j=i+1; j<${#versions[@]}; j++ )); do
+                echo "=== ${versions[i]} vs ${versions[j]} ==="
+                local diff_opts="-y"
+                [[ "$IGNORE_WHITESPACE" == "true" ]] && diff_opts="$diff_opts -w"
+                
+                diff $diff_opts "$temp_dir/${versions[i]}" "$temp_dir/${versions[j]}" || true
+                echo
+            done
+        done
+    fi
+}
+
+show_unified_diff() {
+    local temp_dir="$1"
+    shift
+    local versions=("$@")
+    
+    if [[ ${#versions[@]} -eq 2 ]]; then
+        local diff_opts="-u$CONTEXT_LINES"
+        [[ "$IGNORE_WHITESPACE" == "true" ]] && diff_opts="$diff_opts -w"
+        
+        echo "=== ${versions[0]} vs ${versions[1]} ==="
+        diff $diff_opts "$temp_dir/${versions[0]}" "$temp_dir/${versions[1]}" || true
+    else
+        # For more than 2 versions, show each pair
+        for (( i=0; i<${#versions[@]}-1; i++ )); do
+            for (( j=i+1; j<${#versions[@]}; j++ )); do
+                echo "=== ${versions[i]} vs ${versions[j]} ==="
+                local diff_opts="-u$CONTEXT_LINES"
+                [[ "$IGNORE_WHITESPACE" == "true" ]] && diff_opts="$diff_opts -w"
+                
+                diff $diff_opts "$temp_dir/${versions[i]}" "$temp_dir/${versions[j]}" || true
+                echo
+            done
+        done
+    fi
+}
+
+show_table_diff() {
+    local temp_dir="$1"
+    shift
+    local versions=("$@")
+    
+    # Create a line-by-line comparison table
+    local max_lines=0
+    
+    # Find the maximum number of lines
+    for version in "${versions[@]}"; do
+        local lines="$(wc -l < "$temp_dir/$version")"
+        [[ $lines -gt $max_lines ]] && max_lines=$lines
+    done
+    
+    # Print header
+    printf "%-4s" "LINE"
+    for version in "${versions[@]}"; do
+        printf " %-20s" "$version"
+    done
+    echo
+    
+    printf "%-4s" "----"
+    for version in "${versions[@]}"; do
+        printf " %-20s" "--------------------"
+    done
+    echo
+    
+    # Print each line
+    for (( line=1; line<=max_lines; line++ )); do
+        printf "%-4d" "$line"
+        
+        for version in "${versions[@]}"; do
+            local content="$(sed -n "${line}p" "$temp_dir/$version" 2>/dev/null || echo "")"
+            # Truncate long lines
+            if [[ ${#content} -gt 20 ]]; then
+                content="${content:0:17}..."
+            fi
+            printf " %-20s" "$content"
+        done
+        echo
+    done
+}
+
+# Main function
+main() {
+    # Check dependencies
+    if ! check_dependencies; then
+        exit 1
+    fi
+    
+    # Parse command line arguments
+    parse_args "$@"
+    
+    # Set verbose mode
+    if [[ "$VERBOSE" == "true" ]]; then
+        set -x
+    fi
+    
+    # Execute command
+    case "$COMMAND" in
+        "file")
+            file_diff_command "${REMAINING_ARGS[@]}"
+            ;;
+        "yaml")
+            yaml_diff_command "${REMAINING_ARGS[@]}"
+            ;;
+        "golang-versions")
+            golang_versions_command "${REMAINING_ARGS[@]}"
+            ;;
+        "network-modes")
+            network_modes_command "${REMAINING_ARGS[@]}"
+            ;;
+        "hermetic-status")
+            hermetic_status_command "${REMAINING_ARGS[@]}"
+            ;;
+        "directory")
+            directory_diff_command "${REMAINING_ARGS[@]}"
+            ;;
+        "")
+            log_error "No command specified"
+            show_help
+            exit 1
+            ;;
+        *)
+            log_error "Unknown command: $COMMAND"
+            show_help
+            exit 1
+            ;;
+    esac
+}
+
+# Run main function if script is executed directly
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

@@ -1,0 +1,279 @@
+#!/usr/bin/env bash
+# OpenShift Build Data Multi-Version Setup Tool
+# Initializes and manages git worktrees for multiple OpenShift versions
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/common.sh"
+source "$SCRIPT_DIR/lib/git-utils.sh"
+
+# Default values
+FORCE=false
+VERBOSE=false
+DEBUG=false
+COMMAND=""
+
+# Help function
+show_help() {
+    cat << EOF
+OpenShift Build Data Multi-Version Setup Tool
+
+USAGE:
+    ocp-setup [COMMAND] [OPTIONS]
+
+COMMANDS:
+    init [versions]    Initialize worktrees for specified versions (default: all active)
+    update [versions]  Update existing worktrees with latest changes
+    status [versions]  Show status of worktrees
+    clean [versions]   Remove specified worktrees
+    clone              Clone the main repository (first-time setup)
+
+OPTIONS:
+    -f, --force        Force operation (overwrite existing worktrees)
+    -v, --verbose      Enable verbose output
+    -d, --debug        Enable debug output
+    -h, --help         Show this help message
+
+EXAMPLES:
+    ocp-setup clone                    # First-time setup
+    ocp-setup init                     # Initialize all active versions
+    ocp-setup init 4.19,4.20,4.21     # Initialize specific versions
+    ocp-setup update                   # Update all worktrees
+    ocp-setup status                   # Show status of all worktrees
+    ocp-setup clean 4.17               # Remove worktree for version 4.17
+
+$(show_common_help)
+EOF
+}
+
+# Parse command line arguments
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            -f|--force)
+                FORCE=true
+                shift
+                ;;
+            -v|--verbose)
+                VERBOSE=true
+                shift
+                ;;
+            -d|--debug)
+                DEBUG=true
+                export DEBUG=1
+                shift
+                ;;
+            clone|init|update|status|clean)
+                COMMAND="$1"
+                shift
+                break
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                show_help
+                exit 1
+                ;;
+        esac
+    done
+    
+    # Parse version specifications
+    VERSIONS=()
+    if [[ $# -gt 0 ]]; then
+        if [[ "$1" == "all" ]]; then
+            read -ra VERSIONS <<< "$ACTIVE_VERSIONS"
+        else
+            readarray -t VERSIONS < <(parse_version_range "$1")
+        fi
+    else
+        read -ra VERSIONS <<< "$ACTIVE_VERSIONS"
+    fi
+}
+
+# Clone the main repository
+clone_repository() {
+    local parent_dir="$(dirname "$MULTI_DIR")"
+    local repo_dir="$parent_dir/ocp-build-data"
+    
+    if [[ -d "$repo_dir" ]]; then
+        log_info "Repository already exists at $repo_dir"
+        return 0
+    fi
+    
+    log_info "Cloning OpenShift build data repository"
+    
+    if git clone "$REPO_URL" "$repo_dir"; then
+        log_success "Cloned repository to $repo_dir"
+        
+        # Configure remotes
+        cd "$repo_dir"
+        configure_remotes
+        
+        log_info "Repository is ready. Run 'ocp-setup init' to create worktrees"
+        return 0
+    else
+        log_error "Failed to clone repository"
+        return 1
+    fi
+}
+
+# Initialize worktrees
+init_worktrees() {
+    local versions=("$@")
+    
+    # Check if main repository exists
+    local parent_dir="$(dirname "$MULTI_DIR")"
+    local repo_dir="$parent_dir/ocp-build-data"
+    
+    if [[ ! -d "$repo_dir" ]]; then
+        log_error "Main repository not found. Run 'ocp-setup clone' first"
+        return 1
+    fi
+    
+    # Change to the main repository directory
+    cd "$repo_dir"
+    
+    # Fetch latest changes
+    log_info "Fetching latest changes from upstream"
+    git fetch --all
+    
+    # Create versions directory if it doesn't exist
+    mkdir -p "$VERSIONS_DIR"
+    
+    # Initialize worktrees for each version
+    local success_count=0
+    local total_count=${#versions[@]}
+    
+    for version in "${versions[@]}"; do
+        if ! version_exists "$version"; then
+            log_warning "Version $version is not in the known versions list, skipping"
+            continue
+        fi
+        
+        if init_worktree "$version" "$FORCE"; then
+            ((success_count++))
+        fi
+    done
+    
+    log_info "Initialized $success_count of $total_count worktrees"
+    
+    if [[ $success_count -eq $total_count ]]; then
+        log_success "All worktrees initialized successfully"
+        return 0
+    else
+        log_warning "Some worktrees failed to initialize"
+        return 1
+    fi
+}
+
+# Update existing worktrees
+update_worktrees_command() {
+    local versions=("$@")
+    
+    # Check if main repository exists
+    local parent_dir="$(dirname "$MULTI_DIR")"
+    local repo_dir="$parent_dir/ocp-build-data"
+    
+    if [[ ! -d "$repo_dir" ]]; then
+        log_error "Main repository not found. Run 'ocp-setup clone' first"
+        return 1
+    fi
+    
+    # Change to the main repository directory
+    cd "$repo_dir"
+    
+    update_worktrees "${versions[@]}"
+}
+
+# Show status of worktrees
+show_status() {
+    local versions=("$@")
+    
+    if [[ ${#versions[@]} -eq 0 ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    fi
+    
+    log_info "Worktree status for OpenShift versions"
+    echo
+    
+    show_worktree_status "${versions[@]}"
+}
+
+# Clean up worktrees
+clean_worktrees() {
+    local versions=("$@")
+    
+    if [[ ${#versions[@]} -eq 0 ]]; then
+        log_error "No versions specified for cleanup"
+        return 1
+    fi
+    
+    local parent_dir="$(dirname "$MULTI_DIR")"
+    local repo_dir="$parent_dir/ocp-build-data"
+    
+    if [[ ! -d "$repo_dir" ]]; then
+        log_error "Main repository not found"
+        return 1
+    fi
+    
+    # Change to the main repository directory
+    cd "$repo_dir"
+    
+    for version in "${versions[@]}"; do
+        remove_worktree "$version"
+    done
+}
+
+# Main function
+main() {
+    # Check dependencies
+    if ! check_dependencies; then
+        exit 1
+    fi
+    
+    # Parse command line arguments
+    parse_args "$@"
+    
+    # Set verbose mode
+    if [[ "$VERBOSE" == "true" ]]; then
+        set -x
+    fi
+    
+    # Execute command
+    case "$COMMAND" in
+        "clone")
+            clone_repository
+            ;;
+        "init")
+            init_worktrees "${VERSIONS[@]}"
+            ;;
+        "update")
+            update_worktrees_command "${VERSIONS[@]}"
+            ;;
+        "status")
+            show_status "${VERSIONS[@]}"
+            ;;
+        "clean")
+            clean_worktrees "${VERSIONS[@]}"
+            ;;
+        "")
+            log_error "No command specified"
+            show_help
+            exit 1
+            ;;
+        *)
+            log_error "Unknown command: $COMMAND"
+            show_help
+            exit 1
+            ;;
+    esac
+}
+
+# Run main function if script is executed directly
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

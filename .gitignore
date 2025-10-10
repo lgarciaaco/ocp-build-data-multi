@@ -1,0 +1,33 @@
+# OpenShift Build Data Multi-Version Toolset .gitignore
+
+# Claude folders
+.claude
+
+# Exclude upstream checked-out content
+# The versions/ directory contains git worktrees of the upstream ocp-build-data repository
+versions/
+
+# Personal configuration files
+# These contain user-specific GitHub account information
+config/remotes.conf
+
+# Development artifacts
+*.log
+*.tmp
+.DS_Store
+*~
+*.swp
+*.swo
+
+# IDE files
+.vscode/
+.idea/
+*.sublime-*
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+
+# Backup files
+*.bak
+*.backup

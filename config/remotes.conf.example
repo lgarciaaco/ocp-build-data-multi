@@ -1,0 +1,28 @@
+# Git Remote Configuration Template
+# Copy this file to remotes.conf and customize with your GitHub account details
+
+# Primary upstream remote (read-only, for fetching)
+UPSTREAM_REMOTE="origin"
+UPSTREAM_URL="git@github.com:openshift-eng/ocp-build-data.git"
+
+# Personal fork remote (for pushing changes)
+# Replace "your-github-username" with your actual GitHub username
+PERSONAL_REMOTE="your-github-username"
+PERSONAL_URL="git@github.com:your-github-username/ocp-build-data.git"
+
+# GitHub account name for PR creation
+# This should match your GitHub username
+GITHUB_ACCOUNT="your-github-username"
+
+# Default push remote
+# This should match PERSONAL_REMOTE
+DEFAULT_PUSH_REMOTE="your-github-username"
+
+# Base branch for PRs (usually main)
+PR_BASE_BRANCH="main"
+
+# Setup Instructions:
+# 1. Copy this file: cp config/remotes.conf.example config/remotes.conf
+# 2. Replace "your-github-username" with your actual GitHub username
+# 3. Fork the upstream repository: https://github.com/openshift-eng/ocp-build-data
+# 4. Ensure your fork is accessible via the PERSONAL_URL above
