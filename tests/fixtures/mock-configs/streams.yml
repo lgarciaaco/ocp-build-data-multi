@@ -1,0 +1,39 @@
+# Mock streams.yml for testing
+# Simulates OpenShift 4.21 stream definitions
+
+# Golang builder streams
+rhel-9-golang:
+  aliases:
+  - rhel-9-golang-1.24
+  image: openshift/golang-builder:v1.24.3-202401221732.el9.g00c615b
+  
+rhel-8-golang:
+  aliases:
+  - rhel-8-golang-1.24
+  image: openshift/golang-builder:v1.24.3-202401221732.el8.g00c615b
+
+# Base image streams  
+rhel-9-base:
+  image: openshift/rhel-9-base:v4.21.0
+  
+rhel-8-base:
+  image: openshift/rhel-8-base:v4.21.0
+
+# UBI streams
+ubi9:
+  image: registry.access.redhat.com/ubi9/ubi:9.6
+  
+ubi8:
+  image: registry.access.redhat.com/ubi8/ubi:8.10
+
+# NodeJS streams for testing different builders
+rhel-9-nodejs:
+  aliases:
+  - rhel-9-nodejs-20
+  image: openshift/nodejs-builder:v20-202401221732.el9
+
+# Python streams
+rhel-9-python:
+  aliases:
+  - rhel-9-python-3.11
+  image: openshift/python-builder:v3.11-202401221732.el9

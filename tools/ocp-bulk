@@ -5,8 +5,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
+# shellcheck source=lib/git-utils.sh
 source "$SCRIPT_DIR/lib/git-utils.sh"
+# shellcheck source=lib/yaml-utils.sh
 source "$SCRIPT_DIR/lib/yaml-utils.sh"
 
 # Default values
@@ -136,7 +139,8 @@ commit_command() {
     local total_count=${#versions[@]}
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ ! -d "$version_dir" ]]; then
             log_warning "Worktree for version $version does not exist, skipping"
@@ -192,7 +196,8 @@ push_command() {
     local total_count=${#versions[@]}
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ ! -d "$version_dir" ]]; then
             log_warning "Worktree for version $version does not exist, skipping"
@@ -202,7 +207,8 @@ push_command() {
         log_info "Processing version $version..."
         
         if [[ "$DRY_RUN" == "true" ]]; then
-            local current_branch="$(git -C "$version_dir" branch --show-current 2>/dev/null || echo "unknown")"
+            local current_branch
+            current_branch="$(git -C "$version_dir" branch --show-current 2>/dev/null || echo "unknown")"
             local push_branch="${branch_name:-$current_branch}"
             echo "  Would push $push_branch from version $version to $PERSONAL_REMOTE"
             continue
@@ -242,7 +248,8 @@ branch_command() {
     local total_count=${#versions[@]}
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ ! -d "$version_dir" ]]; then
             log_warning "Worktree for version $version does not exist, skipping"
@@ -290,7 +297,8 @@ checkout_command() {
     local total_count=${#versions[@]}
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ ! -d "$version_dir" ]]; then
             log_warning "Worktree for version $version does not exist, skipping"
@@ -396,7 +404,8 @@ reset_command() {
     local total_count=${#versions[@]}
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ ! -d "$version_dir" ]]; then
             log_warning "Worktree for version $version does not exist, skipping"
@@ -466,7 +475,8 @@ clean_command() {
     local total_count=${#versions[@]}
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ ! -d "$version_dir" ]]; then
             log_warning "Worktree for version $version does not exist, skipping"
@@ -478,7 +488,8 @@ clean_command() {
         if [[ "$DRY_RUN" == "true" ]]; then
             (
                 cd "$version_dir"
-                local untracked="$(git ls-files --others --exclude-standard)"
+                local untracked
+                untracked="$(git ls-files --others --exclude-standard)"
                 if [[ -n "$untracked" ]]; then
                     echo "  Would remove untracked files in version $version:"
                     echo "$untracked" | sed 's/^/    /'
@@ -524,7 +535,8 @@ validate_command() {
     local invalid_files=0
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ ! -d "$version_dir" ]]; then
             log_warning "Worktree for version $version does not exist, skipping"
@@ -534,7 +546,7 @@ validate_command() {
         log_info "Validating version $version..."
         
         find "$version_dir" -name "*.yml" -o -name "*.yaml" | while read -r file; do
-            local relative_path="${file#$version_dir/}"
+            local relative_path="${file#"$version_dir"/}"
             ((total_files++))
             
             if yaml_validate "$file"; then

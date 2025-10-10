@@ -18,7 +18,6 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 PURPLE='\033[0;35m'
-CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Logging functions
@@ -47,13 +46,13 @@ log_debug() {
 # Check if a version is active
 is_active_version() {
     local version="$1"
-    [[ " $ACTIVE_VERSIONS " =~ " $version " ]]
+    [[ " $ACTIVE_VERSIONS " =~ \ $version\  ]]
 }
 
 # Check if a version exists
 version_exists() {
     local version="$1"
-    [[ " $ALL_VERSIONS " =~ " $version " ]]
+    [[ " $ALL_VERSIONS " =~ \ $version\  ]]
 }
 
 # Get version directory path

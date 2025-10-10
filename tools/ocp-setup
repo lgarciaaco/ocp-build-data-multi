@@ -5,7 +5,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
+# shellcheck source=lib/git-utils.sh
 source "$SCRIPT_DIR/lib/git-utils.sh"
 
 # Default values
@@ -96,7 +98,8 @@ parse_args() {
 
 # Clone the main repository
 clone_repository() {
-    local parent_dir="$(dirname "$MULTI_DIR")"
+    local parent_dir
+    parent_dir="$(dirname "$MULTI_DIR")"
     local repo_dir="$parent_dir/ocp-build-data"
     
     if [[ -d "$repo_dir" ]]; then
@@ -126,7 +129,8 @@ init_worktrees() {
     local versions=("$@")
     
     # Check if main repository exists
-    local parent_dir="$(dirname "$MULTI_DIR")"
+    local parent_dir
+    parent_dir="$(dirname "$MULTI_DIR")"
     local repo_dir="$parent_dir/ocp-build-data"
     
     if [[ ! -d "$repo_dir" ]]; then
@@ -175,7 +179,8 @@ update_worktrees_command() {
     local versions=("$@")
     
     # Check if main repository exists
-    local parent_dir="$(dirname "$MULTI_DIR")"
+    local parent_dir
+    parent_dir="$(dirname "$MULTI_DIR")"
     local repo_dir="$parent_dir/ocp-build-data"
     
     if [[ ! -d "$repo_dir" ]]; then
@@ -212,7 +217,8 @@ clean_worktrees() {
         return 1
     fi
     
-    local parent_dir="$(dirname "$MULTI_DIR")"
+    local parent_dir
+    parent_dir="$(dirname "$MULTI_DIR")"
     local repo_dir="$parent_dir/ocp-build-data"
     
     if [[ ! -d "$repo_dir" ]]; then

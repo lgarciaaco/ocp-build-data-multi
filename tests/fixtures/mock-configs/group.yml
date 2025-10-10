@@ -1,0 +1,58 @@
+# Mock group.yml for testing
+# Simulates OpenShift 4.21 group configuration
+
+freeze_automation: false
+
+vars:
+  MAJOR: 4
+  MINOR: 21
+  IMPACT: Low
+  CVES: None
+  RHCOS_EL_MAJOR: 9
+  RHCOS_EL_MINOR: 6
+
+  # Go versions for testing version comparison
+  GO_LATEST: "1.24"
+  GO_EXTRA: "1.24"
+
+compliance:
+  rpm_shim:
+    enabled: true
+
+konflux:
+  # Default hermetic mode - images can override this
+  network_mode: hermetic
+  arches:
+  - x86_64
+  - aarch64
+  - s390x
+  - ppc64le
+  cachi2:
+    enabled: true
+    gomod_version_patch: true
+    lockfile:
+      force: true
+  sast:
+    enabled: true
+
+multi_arch:
+  enabled: true
+
+new_payload_versioning_scheme: false
+operator_image_ref_mode: manifest-list
+signing_advisory: 146686
+
+build_profiles:
+  image:
+    unsigned:
+      signing_intent: unsigned
+      repo_type: unsigned
+    signed:
+      signing_intent: release
+      repo_type: signed
+  rpm:
+    default:
+      targets:
+      - rhaos-{MAJOR}.{MINOR}-rhel-8-candidate
+      hotfix_targets:
+      - rhaos-{MAJOR}.{MINOR}-rhel-8-hotfix

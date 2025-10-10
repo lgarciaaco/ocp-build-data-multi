@@ -1,0 +1,35 @@
+# Mock openshift-enterprise-base.yml - Already hermetic (no network_mode override)
+name: openshift-enterprise-base
+content:
+  source:
+    git:
+      url: git@github.com:openshift-priv/images.git
+      branch:
+        target: release-4.21
+    dockerfile: Dockerfile.rhel9
+from:
+  stream: rhel-9-base
+labels:
+  io.k8s.description: "Base image for OpenShift"
+  io.k8s.display-name: "OpenShift Enterprise Base"
+  io.openshift.tags: "base,rhel9"
+owners:
+- component: "Base Images"
+  product: "OpenShift Container Platform"
+  subcomponent: "base"
+# This image is already hermetic (uses default from group.yml)
+konflux:
+  # No network_mode override - uses hermetic from group.yml
+  cachi2:
+    enabled: true
+    lockfile:
+      rpms:
+      - coreutils
+      - findutils
+      - tar
+      - gzip
+      - which
+  multiarch:
+    enabled: true
+distgit:
+  branch: rhaos-4.21-rhel-9

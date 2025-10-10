@@ -1,0 +1,185 @@
+name: Multi-OS Testing
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-matrix:
+    name: Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-20.04, ubuntu-22.04, macos-13, macos-14]
+        include:
+          - os: ubuntu-20.04
+            install-cmd: make install-deps-ubuntu
+            shell: bash
+          - os: ubuntu-22.04  
+            install-cmd: make install-deps-ubuntu
+            shell: bash
+          - os: macos-13
+            install-cmd: make install-deps-macos
+            shell: bash
+          - os: macos-14
+            install-cmd: make install-deps-macos
+            shell: bash
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Homebrew (macOS)
+        if: runner.os == 'macOS'
+        uses: Homebrew/actions/setup-homebrew@master
+
+      - name: Complete setup and validation
+        shell: ${{ matrix.shell }}
+        run: ${{ matrix.install-cmd }} && make setup && make validate && make status
+
+  test-bash-versions:
+    name: Test Bash Compatibility
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        bash-version: ['4.0', '4.4', '5.0', '5.1', '5.2']
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install specific bash version
+        run: |
+          # Install build dependencies
+          sudo apt-get update
+          sudo apt-get install -y build-essential wget
+          
+          # Download and compile specific bash version
+          cd /tmp
+          BASH_VERSION=${{ matrix.bash-version }}
+          
+          # Handle different version formats
+          case "$BASH_VERSION" in
+            "4.0") DOWNLOAD_VERSION="4.0" ;;
+            "4.4") DOWNLOAD_VERSION="4.4.23" ;;
+            "5.0") DOWNLOAD_VERSION="5.0.18" ;;
+            "5.1") DOWNLOAD_VERSION="5.1.16" ;;
+            "5.2") DOWNLOAD_VERSION="5.2.21" ;;
+          esac
+          
+          wget https://ftp.gnu.org/gnu/bash/bash-${DOWNLOAD_VERSION}.tar.gz
+          tar -xzf bash-${DOWNLOAD_VERSION}.tar.gz
+          cd bash-${DOWNLOAD_VERSION}
+          ./configure --prefix=/usr/local/bash-${BASH_VERSION}
+          make && sudo make install
+          
+          # Verify installation
+          /usr/local/bash-${BASH_VERSION}/bin/bash --version
+
+      - name: Install other dependencies
+        run: make install-deps-ubuntu
+
+      - name: Test tools with specific bash version
+        run: |
+          export BASH_PATH="/usr/local/bash-${{ matrix.bash-version }}/bin/bash"
+          
+          # Test each tool with the specific bash version
+          for tool in tools/ocp-*; do
+            echo "Testing $tool with bash ${{ matrix.bash-version }}"
+            
+            # Update shebang to use specific bash version
+            temp_tool="/tmp/$(basename $tool)"
+            sed "1s|^#!/usr/bin/env bash|#!${BASH_PATH}|" "$tool" > "$temp_tool"
+            chmod +x "$temp_tool"
+            
+            # Test help output
+            "$temp_tool" --help >/dev/null || {
+              echo "❌ $tool failed with bash ${{ matrix.bash-version }}"
+              exit 1
+            }
+            
+            echo "✅ $tool works with bash ${{ matrix.bash-version }}"
+          done
+
+  test-minimal-environment:
+    name: Test Minimal Environment
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:20.04
+    
+    steps:
+      - name: Install minimal requirements
+        run: |
+          apt-get update
+          apt-get install -y git curl wget sudo
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Test dependency detection
+        run: |
+          # Should fail initially due to missing dependencies
+          make check-deps && exit 1 || echo "✅ Correctly detected missing dependencies"
+
+      - name: Complete setup and validation
+        run: make install-deps-ubuntu && make setup && make validate
+
+  test-dependency-versions:
+    name: Test Dependency Version Requirements
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Test with older yq version (should fail)
+        run: |
+          # Install old yq version
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v3.4.1/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          
+          # Install current dependencies without yq (will fail)
+          sudo apt-get update && sudo apt-get install -y git jq
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt-get update && sudo apt-get install -y gh
+          
+          # Should fail due to old yq version
+          make check-deps && exit 1 || echo "✅ Correctly rejected old yq version"
+
+      - name: Install correct yq version
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Verify with correct versions
+        run: make check-deps && make validate
+
+  test-arm64:
+    name: Test ARM64 compatibility
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Test on ARM64
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v $PWD:/workspace \
+            -w /workspace \
+            ubuntu:22.04 \
+            bash -c "
+              apt-get update && apt-get install -y make
+              make install-deps-ubuntu
+              make check-deps
+              make validate
+            "
