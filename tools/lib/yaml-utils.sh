@@ -86,7 +86,8 @@ yaml_has() {
         return 1
     fi
     
-    local value="$(yaml_get "$file" "$path")"
+    local value
+    value="$(yaml_get "$file" "$path")"
     [[ "$value" != "null" ]]
 }
 
@@ -119,7 +120,8 @@ yaml_compare() {
     printf "%-8s %s\n" "-------" "-----"
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         local full_path="$version_dir/$file_path"
         local value="N/A"
         
@@ -148,7 +150,8 @@ yaml_find() {
     log_info "Finding files with $yaml_path = '$expected_value' in pattern '$file_pattern'"
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ ! -d "$version_dir" ]]; then
             continue
@@ -157,10 +160,11 @@ yaml_find() {
         log_info "Checking version $version..."
         
         find "$version_dir" -name "$file_pattern" -type f | while read -r file; do
-            local value="$(yaml_get "$file" "$yaml_path")"
+            local value
+            value="$(yaml_get "$file" "$yaml_path")"
             
             if [[ "$value" == "$expected_value" ]]; then
-                local relative_path="${file#$version_dir/}"
+                local relative_path="${file#"$version_dir"/}"
                 echo "$version:$relative_path"
             fi
         done
@@ -184,7 +188,8 @@ yaml_transform() {
     log_info "Operation: $operation on path $yaml_path"
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ ! -d "$version_dir" ]]; then
             log_warning "Worktree for version $version does not exist, skipping"
@@ -194,7 +199,7 @@ yaml_transform() {
         log_info "Processing version $version..."
         
         find "$version_dir" -name "$file_pattern" -type f | while read -r file; do
-            local relative_path="${file#$version_dir/}"
+            local relative_path="${file#"$version_dir"/}"
             
             # Check if the path exists in the file
             if [[ "$operation" != "set" ]] && ! yaml_has "$file" "$yaml_path"; then
@@ -205,7 +210,8 @@ yaml_transform() {
             log_info "  $relative_path"
             
             if [[ "$dry_run" == "true" ]]; then
-                local current_value="$(yaml_get "$file" "$yaml_path")"
+                local current_value
+                current_value="$(yaml_get "$file" "$yaml_path")"
                 echo "    Would $operation $yaml_path (current: $current_value)"
                 continue
             fi
@@ -275,16 +281,19 @@ check_hermetic_lockfiles() {
     log_info "Checking for missing cachi2 lockfiles in potential hermetic builds"
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ ! -d "$version_dir" ]]; then
             continue
         fi
         
         find "$version_dir/images" -name "*.yml" -type f | while read -r file; do
-            local network_mode="$(yaml_get "$file" ".konflux.network_mode")"
-            local has_lockfile="$(yaml_has "$file" ".konflux.cachi2.lockfile")"
-            local relative_path="${file#$version_dir/}"
+            local network_mode
+            network_mode="$(yaml_get "$file" ".konflux.network_mode")"
+            local has_lockfile
+            has_lockfile="$(yaml_has "$file" ".konflux.cachi2.lockfile")"
+            local relative_path="${file#"$version_dir"/}"
             
             # If no explicit network_mode, it defaults to hermetic from group.yml
             if [[ "$network_mode" == "null" || "$network_mode" == "hermetic" ]]; then

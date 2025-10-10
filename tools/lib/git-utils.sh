@@ -7,8 +7,10 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 init_worktree() {
     local version="$1"
     local force="${2:-false}"
-    local version_dir="$(get_version_dir "$version")"
-    local branch_name="$(get_branch_name "$version")"
+    local version_dir
+    version_dir="$(get_version_dir "$version")"
+    local branch_name
+    branch_name="$(get_branch_name "$version")"
     
     log_info "Initializing worktree for version $version"
     
@@ -31,7 +33,7 @@ init_worktree() {
         
         # Configure remotes in the worktree
         (
-            cd "$version_dir"
+            cd "$version_dir" || return || return
             configure_remotes
         )
         
@@ -44,7 +46,8 @@ init_worktree() {
 
 # Configure git remotes in a worktree
 configure_remotes() {
-    local current_dir="$(pwd)"
+    local current_dir
+    current_dir="$(pwd)"
     
     # Add personal remote if it doesn't exist
     if ! git remote | grep -q "^${PERSONAL_REMOTE}$"; then
@@ -63,7 +66,8 @@ configure_remotes() {
 # Remove worktree for a specific version
 remove_worktree() {
     local version="$1"
-    local version_dir="$(get_version_dir "$version")"
+    local version_dir
+    version_dir="$(get_version_dir "$version")"
     
     if [[ ! -d "$version_dir" ]]; then
         log_warning "Worktree for version $version does not exist"
@@ -97,7 +101,8 @@ update_worktrees() {
     
     # Update each worktree
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+    version_dir="$(get_version_dir "$version")"
         
         if [[ ! -d "$version_dir" ]]; then
             log_warning "Worktree for version $version does not exist, skipping"
@@ -106,8 +111,9 @@ update_worktrees() {
         
         log_info "Updating worktree for version $version"
         (
-            cd "$version_dir"
-            local branch_name="$(get_branch_name "$version")"
+            cd "$version_dir" || return || return
+            local branch_name
+            branch_name="$(get_branch_name "$version")"
             
             # Pull latest changes
             if git pull "$UPSTREAM_REMOTE" "$branch_name" --ff-only; then
@@ -122,7 +128,8 @@ update_worktrees() {
 # Check worktree status
 check_worktree_status() {
     local version="$1"
-    local version_dir="$(get_version_dir "$version")"
+    local version_dir
+    version_dir="$(get_version_dir "$version")"
     
     if [[ ! -d "$version_dir" ]]; then
         echo "missing"
@@ -130,7 +137,7 @@ check_worktree_status() {
     fi
     
     (
-        cd "$version_dir"
+        cd "$version_dir" || return
         
         # Check if there are uncommitted changes
         if ! git diff-index --quiet HEAD --; then
@@ -145,9 +152,12 @@ check_worktree_status() {
         fi
         
         # Check if branch is ahead/behind
-        local branch_name="$(get_branch_name "$version")"
-        local local_ref="$(git rev-parse HEAD)"
-        local remote_ref="$(git rev-parse "$UPSTREAM_REMOTE/$branch_name" 2>/dev/null || echo "")"
+        local branch_name
+        branch_name="$(get_branch_name "$version")"
+        local local_ref
+        local_ref="$(git rev-parse HEAD)"
+        local remote_ref
+        remote_ref="$(git rev-parse "$UPSTREAM_REMOTE/$branch_name" 2>/dev/null || echo "")"
         
         if [[ -z "$remote_ref" ]]; then
             echo "no-remote"
@@ -167,7 +177,8 @@ create_branch() {
     local version="$1"
     local branch_name="$2"
     local base_branch="${3:-$(get_branch_name "$version")}"
-    local version_dir="$(get_version_dir "$version")"
+    local version_dir
+    version_dir="$(get_version_dir "$version")"
     
     if [[ ! -d "$version_dir" ]]; then
         log_error "Worktree for version $version does not exist"
@@ -177,7 +188,7 @@ create_branch() {
     log_info "Creating branch $branch_name for version $version"
     
     (
-        cd "$version_dir"
+        cd "$version_dir" || return
         
         # Create the branch
         if git checkout -b "$branch_name" "$base_branch"; then
@@ -202,7 +213,8 @@ create_branch() {
 commit_changes() {
     local version="$1"
     local message="$2"
-    local version_dir="$(get_version_dir "$version")"
+    local version_dir
+    version_dir="$(get_version_dir "$version")"
     
     if [[ ! -d "$version_dir" ]]; then
         log_error "Worktree for version $version does not exist"
@@ -212,7 +224,7 @@ commit_changes() {
     log_info "Committing changes in version $version"
     
     (
-        cd "$version_dir"
+        cd "$version_dir" || return
         
         # Check if there are changes to commit
         if git diff-index --quiet HEAD --; then
@@ -238,7 +250,8 @@ commit_changes() {
 push_changes() {
     local version="$1"
     local branch_name="${2:-$(git -C "$(get_version_dir "$version")" branch --show-current)}"
-    local version_dir="$(get_version_dir "$version")"
+    local version_dir
+    version_dir="$(get_version_dir "$version")"
     
     if [[ ! -d "$version_dir" ]]; then
         log_error "Worktree for version $version does not exist"
@@ -248,7 +261,7 @@ push_changes() {
     log_info "Pushing changes for version $version"
     
     (
-        cd "$version_dir"
+        cd "$version_dir" || return
         
         if git push "$PERSONAL_REMOTE" "$branch_name"; then
             log_success "Pushed changes for version $version to $PERSONAL_REMOTE/$branch_name"
@@ -272,8 +285,10 @@ show_worktree_status() {
     printf "%-8s %-12s %-15s %s\n" "-------" "------" "------" "-------"
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
-        local status="$(check_worktree_status "$version")"
+        local version_dir
+    version_dir="$(get_version_dir "$version")"
+        local status
+        status="$(check_worktree_status "$version")"
         local branch=""
         local changes=""
         
@@ -281,9 +296,12 @@ show_worktree_status() {
             branch="$(git -C "$version_dir" branch --show-current 2>/dev/null || echo "unknown")"
             
             # Count changes
-            local modified="$(git -C "$version_dir" diff --name-only | wc -l | xargs)"
-            local staged="$(git -C "$version_dir" diff --cached --name-only | wc -l | xargs)"
-            local untracked="$(git -C "$version_dir" ls-files --others --exclude-standard | wc -l | xargs)"
+            local modified
+            modified="$(git -C "$version_dir" diff --name-only | wc -l | xargs)"
+            local staged
+            staged="$(git -C "$version_dir" diff --cached --name-only | wc -l | xargs)"
+            local untracked
+            untracked="$(git -C "$version_dir" ls-files --others --exclude-standard | wc -l | xargs)"
             
             changes="M:$modified S:$staged U:$untracked"
         else

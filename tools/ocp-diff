@@ -5,8 +5,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
+# shellcheck source=lib/git-utils.sh
 source "$SCRIPT_DIR/lib/git-utils.sh"
+# shellcheck source=lib/yaml-utils.sh
 source "$SCRIPT_DIR/lib/yaml-utils.sh"
 
 # Default values
@@ -131,14 +134,16 @@ file_diff_command() {
     log_info "Comparing $file_path across versions: ${versions[*]}"
     
     # Create temporary files for comparison
-    local temp_dir="$(mktemp -d)"
-    trap "rm -rf '$temp_dir'" EXIT
+    local temp_dir
+    temp_dir="$(mktemp -d)"
+    trap 'rm -rf "$temp_dir"' EXIT
     
     local available_versions=()
     
     # Copy files to temp directory
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         local full_path="$version_dir/$file_path"
         
         if [[ -f "$full_path" ]]; then
@@ -215,12 +220,15 @@ golang_versions_command() {
     printf "%-8s %-12s %-12s\n" "-------" "---------" "--------"
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         local group_file="$version_dir/group.yml"
         
         if [[ -f "$group_file" ]]; then
-            local go_latest="$(yaml_get "$group_file" ".vars.GO_LATEST")"
-            local go_extra="$(yaml_get "$group_file" ".vars.GO_EXTRA")"
+            local go_latest
+            go_latest="$(yaml_get "$group_file" ".vars.GO_LATEST")"
+            local go_extra
+            go_extra="$(yaml_get "$group_file" ".vars.GO_EXTRA")"
             
             [[ "$go_latest" == "null" ]] && go_latest="(not set)"
             [[ "$go_extra" == "null" ]] && go_extra="(not set)"
@@ -250,7 +258,8 @@ network_modes_command() {
     printf "%-8s %-12s %-15s %s\n" "-------" "-------" "-----------" "--------------"
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ ! -d "$version_dir" ]]; then
             printf "%-8s %-12s %-15s %s\n" "$version" "N/A" "N/A" "N/A"
@@ -262,7 +271,8 @@ network_modes_command() {
         local default_mode="hermetic"
         
         if [[ -f "$group_file" ]]; then
-            local konflux_mode="$(yaml_get "$group_file" ".konflux.network_mode")"
+            local konflux_mode
+            konflux_mode="$(yaml_get "$group_file" ".konflux.network_mode")"
             [[ "$konflux_mode" != "null" ]] && default_mode="$konflux_mode"
         fi
         
@@ -297,7 +307,8 @@ hermetic_status_command() {
     echo
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ ! -d "$version_dir" ]]; then
             log_warning "Version $version: Worktree not found"
@@ -309,7 +320,8 @@ hermetic_status_command() {
         # Check default network mode
         local group_file="$version_dir/group.yml"
         if [[ -f "$group_file" ]]; then
-            local default_mode="$(yaml_get "$group_file" ".konflux.network_mode")"
+            local default_mode
+            default_mode="$(yaml_get "$group_file" ".konflux.network_mode")"
             if [[ "$default_mode" == "null" ]]; then
                 echo "  Default mode: hermetic (implicit)"
             else
@@ -325,9 +337,11 @@ hermetic_status_command() {
             local found_open=false
             find "$version_dir/images" -name "*.yml" -type f | while read -r file; do
                 if yaml_has "$file" ".konflux.network_mode"; then
-                    local mode="$(yaml_get "$file" ".konflux.network_mode")"
+                    local mode
+                    mode="$(yaml_get "$file" ".konflux.network_mode")"
                     if [[ "$mode" == "open" ]]; then
-                        local filename="$(basename "$file" .yml)"
+                        local filename
+                        filename="$(basename "$file" .yml)"
                         echo "    - $filename"
                         found_open=true
                     fi
@@ -346,13 +360,16 @@ hermetic_status_command() {
         if [[ -d "$version_dir/images" ]]; then
             local found_missing=false
             find "$version_dir/images" -name "*.yml" -type f | while read -r file; do
-                local network_mode="$(yaml_get "$file" ".konflux.network_mode")"
-                local has_lockfile="$(yaml_has "$file" ".konflux.cachi2.lockfile")"
+                local network_mode
+                network_mode="$(yaml_get "$file" ".konflux.network_mode")"
+                local has_lockfile
+                has_lockfile="$(yaml_has "$file" ".konflux.cachi2.lockfile")"
                 
                 # If no explicit network_mode, it defaults to hermetic
                 if [[ "$network_mode" == "null" || "$network_mode" == "hermetic" ]]; then
                     if ! $has_lockfile; then
-                        local filename="$(basename "$file" .yml)"
+                        local filename
+                        filename="$(basename "$file" .yml)"
                         echo "    - $filename (may need lockfile for hermetic build)"
                         found_missing=true
                     fi
@@ -390,17 +407,19 @@ directory_diff_command() {
     echo
     
     # Collect all unique files across versions
-    local all_files=()
-    local temp_dir="$(mktemp -d)"
-    trap "rm -rf '$temp_dir'" EXIT
+    local temp_dir
+    temp_dir="$(mktemp -d)"
+    trap 'rm -rf "$temp_dir"' EXIT
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         local full_dir="$version_dir/$dir_path"
         
         if [[ -d "$full_dir" ]]; then
             find "$full_dir" -type f -name "*.yml" | while read -r file; do
-                local relative_file="${file#$full_dir/}"
+                local relative_file
+                relative_file="${file#"$full_dir"/}"
                 echo "$relative_file"
             done > "$temp_dir/files_$version"
         else
@@ -428,7 +447,8 @@ directory_diff_command() {
         printf "%-30s" "$(basename "$file")"
         
         for version in "${versions[@]}"; do
-            local version_dir="$(get_version_dir "$version")"
+            local version_dir
+            version_dir="$(get_version_dir "$version")"
             local full_file="$version_dir/$dir_path/$file"
             
             if [[ -f "$full_file" ]]; then
@@ -452,7 +472,7 @@ show_side_by_side_diff() {
         [[ "$IGNORE_WHITESPACE" == "true" ]] && diff_opts="$diff_opts -w"
         
         echo "=== ${versions[0]} vs ${versions[1]} ==="
-        diff $diff_opts "$temp_dir/${versions[0]}" "$temp_dir/${versions[1]}" || true
+        diff "$diff_opts" "$temp_dir/${versions[0]}" "$temp_dir/${versions[1]}" || true
     else
         # For more than 2 versions, show each pair
         for (( i=0; i<${#versions[@]}-1; i++ )); do
@@ -461,7 +481,7 @@ show_side_by_side_diff() {
                 local diff_opts="-y"
                 [[ "$IGNORE_WHITESPACE" == "true" ]] && diff_opts="$diff_opts -w"
                 
-                diff $diff_opts "$temp_dir/${versions[i]}" "$temp_dir/${versions[j]}" || true
+                diff "$diff_opts" "$temp_dir/${versions[i]}" "$temp_dir/${versions[j]}" || true
                 echo
             done
         done
@@ -478,7 +498,7 @@ show_unified_diff() {
         [[ "$IGNORE_WHITESPACE" == "true" ]] && diff_opts="$diff_opts -w"
         
         echo "=== ${versions[0]} vs ${versions[1]} ==="
-        diff $diff_opts "$temp_dir/${versions[0]}" "$temp_dir/${versions[1]}" || true
+        diff "$diff_opts" "$temp_dir/${versions[0]}" "$temp_dir/${versions[1]}" || true
     else
         # For more than 2 versions, show each pair
         for (( i=0; i<${#versions[@]}-1; i++ )); do
@@ -487,7 +507,7 @@ show_unified_diff() {
                 local diff_opts="-u$CONTEXT_LINES"
                 [[ "$IGNORE_WHITESPACE" == "true" ]] && diff_opts="$diff_opts -w"
                 
-                diff $diff_opts "$temp_dir/${versions[i]}" "$temp_dir/${versions[j]}" || true
+                diff "$diff_opts" "$temp_dir/${versions[i]}" "$temp_dir/${versions[j]}" || true
                 echo
             done
         done
@@ -504,7 +524,8 @@ show_table_diff() {
     
     # Find the maximum number of lines
     for version in "${versions[@]}"; do
-        local lines="$(wc -l < "$temp_dir/$version")"
+        local lines
+        lines="$(wc -l < "$temp_dir/$version")"
         [[ $lines -gt $max_lines ]] && max_lines=$lines
     done
     
@@ -526,7 +547,8 @@ show_table_diff() {
         printf "%-4d" "$line"
         
         for version in "${versions[@]}"; do
-            local content="$(sed -n "${line}p" "$temp_dir/$version" 2>/dev/null || echo "")"
+            local content
+            content="$(sed -n "${line}p" "$temp_dir/$version" 2>/dev/null || echo "")"
             # Truncate long lines
             if [[ ${#content} -gt 20 ]]; then
                 content="${content:0:17}..."

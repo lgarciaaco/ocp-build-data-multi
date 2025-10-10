@@ -1,0 +1,37 @@
+# Mock ose-etcd.yml - Image with network_mode: open (conversion candidate)
+name: ose-etcd
+content:
+  source:
+    git:
+      url: git@github.com:openshift-priv/etcd.git
+      branch:
+        target: release-4.21
+    dockerfile: Dockerfile.rhel
+from:
+  stream: rhel-9-golang
+labels:
+  io.k8s.description: "Etcd for OpenShift"
+  io.k8s.display-name: "OpenShift Etcd"
+  io.openshift.tags: "etcd,database"
+owners:
+- component: "Etcd"
+  product: "OpenShift Container Platform"
+  subcomponent: "etcd"
+# This image still uses network mode open - candidate for hermetic conversion
+konflux:
+  network_mode: open  # This should be removed for hermetic conversion
+  cachi2:
+    enabled: true
+    lockfile:
+      # RPMs needed for etcd build
+      rpms:
+      - golang
+      - git
+      - make
+      - gcc
+  multiarch:
+    enabled: true
+    exclude_arches:
+    - s390x  # etcd doesn't support s390x
+distgit:
+  branch: rhaos-4.21-rhel-9

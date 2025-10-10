@@ -1,0 +1,58 @@
+# Mock cluster-monitoring-operator.yml - Complex configuration for testing
+name: cluster-monitoring-operator
+content:
+  source:
+    git:
+      url: git@github.com:openshift-priv/cluster-monitoring-operator.git
+      branch:
+        target: release-4.21
+    dockerfile: Dockerfile
+from:
+  builder:
+  - stream: rhel-9-golang
+  member: openshift-enterprise-base
+labels:
+  io.k8s.description: "Cluster Monitoring Operator for OpenShift"
+  io.k8s.display-name: "OpenShift Cluster Monitoring Operator"
+  io.openshift.tags: "monitoring,operator,prometheus"
+owners:
+- component: "Monitoring"
+  product: "OpenShift Container Platform"
+  subcomponent: "cluster-monitoring-operator"
+# Complex konflux configuration for testing edge cases
+konflux:
+  network_mode: open  # Candidate for conversion
+  cachi2:
+    enabled: true
+    gomod_version_patch: true
+    lockfile:
+      # Complex RPM list for testing
+      rpms:
+      - golang
+      - git
+      - make
+      - gcc
+      - prometheus-devel
+      - grafana-devel
+      - alertmanager-devel
+      - thanos-devel
+      # Architecture-specific packages
+      - "arch:x86_64:prometheus-node-exporter"
+      - "arch:aarch64:prometheus-node-exporter-arm64"
+      - "arch:ppc64le:prometheus-node-exporter-ppc64le"
+      - "arch:s390x:prometheus-node-exporter-s390x"
+  multiarch:
+    enabled: true
+  sast:
+    enabled: true
+    exclude_paths:
+    - "vendor/"
+    - "test/"
+# Additional testing configurations
+distgit:
+  branch: rhaos-4.21-rhel-9
+  component: cluster-monitoring-operator
+tests:
+  unit: true
+  integration: true
+  e2e: true

@@ -5,8 +5,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
+# shellcheck source=lib/git-utils.sh
 source "$SCRIPT_DIR/lib/git-utils.sh"
+# shellcheck source=lib/yaml-utils.sh
 source "$SCRIPT_DIR/lib/yaml-utils.sh"
 
 # Default values
@@ -288,16 +291,17 @@ find_view_command() {
     echo
     
     # Collect all matching files
-    local all_files=()
-    local temp_dir="$(mktemp -d)"
-    trap "rm -rf '$temp_dir'" EXIT
+    local temp_dir
+    temp_dir="$(mktemp -d)"
+    trap 'rm -rf "$temp_dir"' EXIT
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ -d "$version_dir" ]]; then
             find "$version_dir" -name "$name_pattern" -type f | while read -r file; do
-                local relative_file="${file#$version_dir/}"
+                local relative_file="${file#"$version_dir"/}"
                 echo "$relative_file"
             done > "$temp_dir/files_$version"
         else
@@ -347,7 +351,8 @@ summary_view_command() {
     printf "%-8s %-12s %-12s %-15s %-10s\n" "-------" "---------" "--------" "------------" "------"
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ ! -d "$version_dir" ]]; then
             printf "%-8s %-12s %-12s %-15s %-10s\n" "$version" "N/A" "N/A" "N/A" "Missing"
@@ -361,9 +366,12 @@ summary_view_command() {
         local status="Clean"
         
         if [[ -f "$group_file" ]]; then
-            local go_latest_val="$(yaml_get "$group_file" ".vars.GO_LATEST")"
-            local go_extra_val="$(yaml_get "$group_file" ".vars.GO_EXTRA")"
-            local network_mode_val="$(yaml_get "$group_file" ".konflux.network_mode")"
+            local go_latest_val
+            go_latest_val="$(yaml_get "$group_file" ".vars.GO_LATEST")"
+            local go_extra_val
+            go_extra_val="$(yaml_get "$group_file" ".vars.GO_EXTRA")"
+            local network_mode_val
+            network_mode_val="$(yaml_get "$group_file" ".konflux.network_mode")"
             
             [[ "$go_latest_val" != "null" ]] && go_latest="$go_latest_val"
             [[ "$go_extra_val" != "null" ]] && go_extra="$go_extra_val"
@@ -371,7 +379,8 @@ summary_view_command() {
         fi
         
         # Check for uncommitted changes
-        local worktree_status="$(check_worktree_status "$version")"
+        local worktree_status
+        worktree_status="$(check_worktree_status "$version")"
         [[ "$worktree_status" != "clean" ]] && status="$worktree_status"
         
         printf "%-8s %-12s %-12s %-15s %-10s\n" "$version" "$go_latest" "$go_extra" "$network_mode" "$status"
@@ -383,7 +392,8 @@ summary_view_command() {
     printf "%-8s %-8s %-8s %-8s\n" "-------" "------" "----" "-----"
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         local image_count="0"
         local rpm_count="0"
         local total_count="0"
@@ -403,7 +413,8 @@ summary_view_command() {
     printf "%-8s %-15s %-20s\n" "-------" "-----------" "--------------"
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         local open_count="0"
         local hermetic_ready="Unknown"
         
@@ -431,11 +442,13 @@ show_file_table() {
     # Find the file with the most lines to determine table size
     local max_lines=0
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         local full_path="$version_dir/$file_path"
         
         if [[ -f "$full_path" ]]; then
-            local lines="$(wc -l < "$full_path")"
+            local lines
+            lines="$(wc -l < "$full_path")"
             [[ $lines -gt $max_lines ]] && max_lines=$lines
         fi
     done
@@ -473,7 +486,8 @@ show_file_table() {
         fi
         
         for version in "${versions[@]}"; do
-            local version_dir="$(get_version_dir "$version")"
+            local version_dir
+        version_dir="$(get_version_dir "$version")"
             local full_path="$version_dir/$file_path"
             local content=""
             
@@ -498,7 +512,8 @@ show_file_columns() {
     local versions=("$@")
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         local full_path="$version_dir/$file_path"
         
         echo "=== $version ==="
@@ -526,7 +541,8 @@ show_file_json() {
     
     local first=true
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         local full_path="$version_dir/$file_path"
         
         [[ "$first" != "true" ]] && echo ","
@@ -566,7 +582,8 @@ show_yaml_json() {
     
     local first=true
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         local full_path="$version_dir/$file_path"
         
         [[ "$first" != "true" ]] && echo ","
@@ -574,7 +591,8 @@ show_yaml_json() {
         
         echo -n "    \"$version\": "
         if [[ -f "$full_path" ]]; then
-            local value="$(yaml_get "$full_path" "$yaml_path")"
+            local value
+            value="$(yaml_get "$full_path" "$yaml_path")"
             if [[ "$value" == "null" ]]; then
                 echo "null"
             else
@@ -618,7 +636,8 @@ show_lines_table() {
         printf "%-4d" "$line"
         
         for version in "${versions[@]}"; do
-            local version_dir="$(get_version_dir "$version")"
+            local version_dir
+        version_dir="$(get_version_dir "$version")"
             local full_path="$version_dir/$file_path"
             local content=""
             
@@ -645,7 +664,8 @@ show_lines_columns() {
     local versions=("$@")
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         local full_path="$version_dir/$file_path"
         
         echo "=== $version (lines $start_line-$end_line) ==="
@@ -676,7 +696,8 @@ show_lines_json() {
     
     local first=true
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         local full_path="$version_dir/$file_path"
         
         [[ "$first" != "true" ]] && echo ","
@@ -689,7 +710,8 @@ show_lines_json() {
             
             local line_first=true
             for (( line=start_line; line<=end_line; line++ )); do
-                local content="$(sed -n "${line}p" "$full_path" 2>/dev/null || echo "")"
+                local content
+                content="$(sed -n "${line}p" "$full_path" 2>/dev/null || echo "")"
                 
                 [[ "$line_first" != "true" ]] && echo ","
                 line_first=false
@@ -721,11 +743,12 @@ show_grep_table() {
     printf "%-8s %-30s %-6s %s\n" "-------" "------------------------------" "----" "-------"
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ -d "$version_dir" ]]; then
             find "$version_dir" -name "$file_pattern" -type f | while read -r file; do
-                local relative_file="${file#$version_dir/}"
+                local relative_file="${file#"$version_dir"/}"
                 
                 grep -n "$pattern" "$file" 2>/dev/null | while IFS=: read -r line_num content; do
                     # Truncate long content
@@ -747,14 +770,16 @@ show_grep_columns() {
     local versions=("$@")
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         echo "=== $version ==="
         if [[ -d "$version_dir" ]]; then
             find "$version_dir" -name "$file_pattern" -type f | while read -r file; do
-                local relative_file="${file#$version_dir/}"
+                local relative_file="${file#"$version_dir"/}"
                 
-                local matches="$(grep -n "$pattern" "$file" 2>/dev/null || true)"
+                local matches
+                matches="$(grep -n "$pattern" "$file" 2>/dev/null || true)"
                 if [[ -n "$matches" ]]; then
                     echo "  $relative_file:"
                     echo "$matches" | while IFS=: read -r line_num content; do
@@ -782,7 +807,8 @@ show_grep_json() {
     
     local first=true
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         [[ "$first" != "true" ]] && echo ","
         first=false
@@ -792,7 +818,7 @@ show_grep_json() {
         if [[ -d "$version_dir" ]]; then
             local file_first=true
             find "$version_dir" -name "$file_pattern" -type f | while read -r file; do
-                local relative_file="${file#$version_dir/}"
+                local relative_file="${file#"$version_dir"/}"
                 
                 grep -n "$pattern" "$file" 2>/dev/null | while IFS=: read -r line_num content; do
                     [[ "$file_first" != "true" ]] && echo ","
@@ -833,7 +859,8 @@ show_find_table() {
     echo
     
     while IFS= read -r file; do
-        local basename_file="$(basename "$file")"
+        local basename_file
+        basename_file="$(basename "$file")"
         printf "%-40s" "$basename_file"
         
         for version in "${versions[@]}"; do

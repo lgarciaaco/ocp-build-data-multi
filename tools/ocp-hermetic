@@ -5,8 +5,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
+# shellcheck source=lib/git-utils.sh
 source "$SCRIPT_DIR/lib/git-utils.sh"
+# shellcheck source=lib/yaml-utils.sh
 source "$SCRIPT_DIR/lib/yaml-utils.sh"
 
 # Default values
@@ -247,7 +250,8 @@ convert_command() {
     local total_count=0
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         local image_file="$version_dir/images/${image_name}.yml"
         
         if [[ ! -f "$image_file" ]]; then
@@ -260,7 +264,8 @@ convert_command() {
         log_info "Processing $image_name in version $version..."
         
         # Check if already hermetic
-        local network_mode="$(yaml_get "$image_file" ".konflux.network_mode")"
+        local network_mode
+        network_mode="$(yaml_get "$image_file" ".konflux.network_mode")"
         
         if [[ "$network_mode" == "null" ]]; then
             log_info "  Image $image_name in version $version is already hermetic (no explicit network_mode)"
@@ -279,7 +284,8 @@ convert_command() {
                 ((success_count++))
                 
                 # Check if konflux section is now empty and remove it
-                local konflux_keys="$(yaml_keys "$image_file" ".konflux" 2>/dev/null | wc -l || echo 0)"
+                local konflux_keys
+                konflux_keys="$(yaml_keys "$image_file" ".konflux" 2>/dev/null | wc -l || echo 0)"
                 if [[ "$konflux_keys" -eq 0 ]]; then
                     yaml_delete "$image_file" ".konflux" false
                     log_debug "  Removed empty konflux section"
@@ -331,7 +337,8 @@ report_command() {
     local total_images=0
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ ! -d "$version_dir" ]]; then
             printf "%-8s %-15s %-15s %-15s %-15s\n" "$version" "N/A" "N/A" "N/A" "N/A"
@@ -342,7 +349,8 @@ report_command() {
         local group_file="$version_dir/group.yml"
         local default_mode="hermetic"
         if [[ -f "$group_file" ]]; then
-            local mode="$(yaml_get "$group_file" ".konflux.network_mode")"
+            local mode
+            mode="$(yaml_get "$group_file" ".konflux.network_mode")"
             [[ "$mode" != "null" ]] && default_mode="$mode"
         fi
         
@@ -376,18 +384,22 @@ report_command() {
     echo "=== CONVERSION CANDIDATES ==="
     
     # Collect all unique open images
-    local temp_dir="$(mktemp -d)"
-    trap "rm -rf '$temp_dir'" EXIT
+    local temp_dir
+    temp_dir="$(mktemp -d)"
+    trap 'rm -rf "$temp_dir"' EXIT
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ -d "$version_dir/images" ]]; then
             find "$version_dir/images" -name "*.yml" -type f | while read -r file; do
                 if yaml_has "$file" ".konflux.network_mode"; then
-                    local mode="$(yaml_get "$file" ".konflux.network_mode")"
+                    local mode
+                    mode="$(yaml_get "$file" ".konflux.network_mode")"
                     if [[ "$mode" == "open" ]]; then
-                        local filename="$(basename "$file" .yml)"
+                        local filename
+                        filename="$(basename "$file" .yml)"
                         echo "$filename"
                     fi
                 fi
@@ -448,12 +460,15 @@ report_command() {
     
     local missing_lockfiles=0
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ -d "$version_dir/images" ]]; then
             find "$version_dir/images" -name "*.yml" -type f | while read -r file; do
-                local network_mode="$(yaml_get "$file" ".konflux.network_mode")"
-                local has_lockfile="$(yaml_has "$file" ".konflux.cachi2.lockfile")"
+                local network_mode
+                network_mode="$(yaml_get "$file" ".konflux.network_mode")"
+                local has_lockfile
+                has_lockfile="$(yaml_has "$file" ".konflux.cachi2.lockfile")"
                 
                 # If no explicit network_mode, it defaults to hermetic
                 if [[ "$network_mode" == "null" || "$network_mode" == "hermetic" ]]; then
@@ -494,15 +509,18 @@ progress_command() {
     local grand_hermetic=0
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ ! -d "$version_dir/images" ]]; then
             printf "%-8s %-10s %-10s %-10s %-12s\n" "$version" "N/A" "N/A" "N/A" "N/A"
             continue
         fi
         
-        local total_images="$(find "$version_dir/images" -name "*.yml" -type f | wc -l | xargs)"
-        local open_images="$(find "$version_dir/images" -name "*.yml" -type f -exec grep -l "network_mode: open" {} \; 2>/dev/null | wc -l | xargs)"
+        local total_images
+        total_images="$(find "$version_dir/images" -name "*.yml" -type f | wc -l | xargs)"
+        local open_images
+        open_images="$(find "$version_dir/images" -name "*.yml" -type f -exec grep -l "network_mode: open" {} \; 2>/dev/null | wc -l | xargs)"
         local hermetic_images=$((total_images - open_images))
         local progress_pct=0
         
@@ -553,7 +571,8 @@ show_status_table() {
     printf "%-8s %-15s %-10s %-10s %-15s\n" "-------" "---------------" "-----" "----" "---------------"
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ ! -d "$version_dir" ]]; then
             printf "%-8s %-15s %-10s %-10s %-15s\n" "$version" "N/A" "N/A" "N/A" "Missing"
@@ -564,7 +583,8 @@ show_status_table() {
         local group_file="$version_dir/group.yml"
         local default_mode="hermetic"
         if [[ -f "$group_file" ]]; then
-            local mode="$(yaml_get "$group_file" ".konflux.network_mode")"
+            local mode
+            mode="$(yaml_get "$group_file" ".konflux.network_mode")"
             [[ "$mode" != "null" ]] && default_mode="$mode"
         fi
         
@@ -596,7 +616,8 @@ show_status_json() {
         [[ "$first" != "true" ]] && echo ","
         first=false
         
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         echo "    \"$version\": {"
         
@@ -609,7 +630,8 @@ show_status_json() {
             local group_file="$version_dir/group.yml"
             local default_mode="hermetic"
             if [[ -f "$group_file" ]]; then
-                local mode="$(yaml_get "$group_file" ".konflux.network_mode")"
+                local mode
+            mode="$(yaml_get "$group_file" ".konflux.network_mode")"
                 [[ "$mode" != "null" ]] && default_mode="$mode"
             fi
             
@@ -626,7 +648,7 @@ show_status_json() {
             echo "      \"total_images\": $total_count,"
             echo "      \"open_images\": $open_count,"
             echo "      \"hermetic_images\": $((total_count - open_count)),"
-            echo "      \"conversion_complete\": $([ $open_count -eq 0 ] && echo "true" || echo "false")"
+            echo "      \"conversion_complete\": $([ "$open_count" -eq 0 ] && echo "true" || echo "false")"
         fi
         
         echo "    }"
@@ -642,7 +664,8 @@ show_status_csv() {
     echo "Version,DefaultMode,TotalImages,OpenImages,HermeticImages,ConversionComplete"
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ ! -d "$version_dir" ]]; then
             echo "$version,N/A,N/A,N/A,N/A,N/A"
@@ -653,7 +676,8 @@ show_status_csv() {
         local group_file="$version_dir/group.yml"
         local default_mode="hermetic"
         if [[ -f "$group_file" ]]; then
-            local mode="$(yaml_get "$group_file" ".konflux.network_mode")"
+            local mode
+            mode="$(yaml_get "$group_file" ".konflux.network_mode")"
             [[ "$mode" != "null" ]] && default_mode="$mode"
         fi
         
@@ -667,7 +691,8 @@ show_status_csv() {
         fi
         
         local hermetic_count=$((total_count - open_count))
-        local complete=$([ $open_count -eq 0 ] && echo "true" || echo "false")
+        local complete
+        complete=$([ "$open_count" -eq 0 ] && echo "true" || echo "false")
         
         echo "$version,$default_mode,$total_count,$open_count,$hermetic_count,$complete"
     done
@@ -677,18 +702,22 @@ show_candidates_table() {
     local versions=("$@")
     
     # Collect all open images across versions
-    local temp_dir="$(mktemp -d)"
-    trap "rm -rf '$temp_dir'" EXIT
+    local temp_dir
+    temp_dir="$(mktemp -d)"
+    trap 'rm -rf "$temp_dir"' EXIT
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ -d "$version_dir/images" ]]; then
             find "$version_dir/images" -name "*.yml" -type f | while read -r file; do
                 if yaml_has "$file" ".konflux.network_mode"; then
-                    local mode="$(yaml_get "$file" ".konflux.network_mode")"
+                    local mode
+                    mode="$(yaml_get "$file" ".konflux.network_mode")"
                     if [[ "$mode" == "open" ]]; then
-                        local filename="$(basename "$file" .yml)"
+                        local filename
+                        filename="$(basename "$file" .yml)"
                         echo "$filename"
                     fi
                 fi
@@ -801,21 +830,26 @@ show_missing_lockfiles_table() {
     echo
     
     # Check each version for hermetic images without lockfiles
-    local temp_dir="$(mktemp -d)"
-    trap "rm -rf '$temp_dir'" EXIT
+    local temp_dir
+    temp_dir="$(mktemp -d)"
+    trap 'rm -rf "$temp_dir"' EXIT
     
     for version in "${versions[@]}"; do
-        local version_dir="$(get_version_dir "$version")"
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
         
         if [[ -d "$version_dir/images" ]]; then
             find "$version_dir/images" -name "*.yml" -type f | while read -r file; do
-                local network_mode="$(yaml_get "$file" ".konflux.network_mode")"
-                local has_lockfile="$(yaml_has "$file" ".konflux.cachi2.lockfile")"
+                local network_mode
+                network_mode="$(yaml_get "$file" ".konflux.network_mode")"
+                local has_lockfile
+                has_lockfile="$(yaml_has "$file" ".konflux.cachi2.lockfile")"
                 
                 # If no explicit network_mode, it defaults to hermetic
                 if [[ "$network_mode" == "null" || "$network_mode" == "hermetic" ]]; then
                     if ! $has_lockfile; then
-                        local filename="$(basename "$file" .yml)"
+                        local filename
+                        filename="$(basename "$file" .yml)"
                         echo "$filename"
                     fi
                 fi

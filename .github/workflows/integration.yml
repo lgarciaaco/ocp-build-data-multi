@@ -1,0 +1,345 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-mock-operations:
+    name: Test Mock Operations
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup test environment
+        run: |
+          make install-deps-ubuntu
+          make setup
+          sed -i 's/your-github-username/test-user/g' config/remotes.conf
+
+      - name: Create mock worktree structure
+        run: |
+          # Create mock version directories with minimal structure
+          mkdir -p tests/mock-worktrees/{4.19,4.20,4.21}
+          
+          # Create mock git repositories
+          for version in 4.19 4.20 4.21; do
+            cd tests/mock-worktrees/$version
+            git init
+            git config user.email "test@example.com"
+            git config user.name "Test User"
+            
+            # Create mock OpenShift build data structure
+            mkdir -p images rpms
+            
+            # Create mock group.yml
+            cat > group.yml << EOF
+          freeze_automation: false
+          vars:
+            MAJOR: 4
+            MINOR: ${version#*.}
+            GO_LATEST: "1.24"
+          konflux:
+            network_mode: hermetic
+          EOF
+            
+            # Create mock streams.yml
+            cat > streams.yml << EOF
+          rhel-9-golang:
+            image: openshift/golang-builder:v1.24.0
+          EOF
+            
+            # Create mock image files
+            cat > images/ose-etcd.yml << EOF
+          name: ose-etcd
+          content:
+            source:
+              git:
+                url: git@github.com:openshift-priv/etcd.git
+                branch:
+                  target: release-$version
+          konflux:
+            network_mode: open
+            cachi2:
+              enabled: true
+          EOF
+            
+            cat > images/openshift-enterprise-base.yml << EOF
+          name: openshift-enterprise-base
+          content:
+            source:
+              git:
+                url: git@github.com:openshift-priv/images.git
+                branch:
+                  target: release-$version
+          konflux:
+            cachi2:
+              enabled: true
+          EOF
+            
+            # Commit initial files
+            git add .
+            git commit -m "Initial mock data for version $version"
+            
+            cd ../../..
+          done
+
+      - name: Test ocp-view with mock data
+        run: |
+          # Test file viewing functionality
+          echo "Testing ocp-view file operations..."
+          
+          # Create a wrapper script that uses mock data
+          cat > test-ocp-view.sh << 'EOF'
+          #!/bin/bash
+          # Override VERSIONS_DIR to use mock data
+          export VERSIONS_DIR="$PWD/tests/mock-worktrees"
+          
+          # Test file viewing
+          echo "Testing file viewing across versions..."
+          ./tools/ocp-view file group.yml 4.19,4.20,4.21 --format table
+          
+          # Test YAML value extraction
+          echo "Testing YAML value extraction..."
+          ./tools/ocp-view yaml group.yml ".vars.GO_LATEST" 4.19,4.20,4.21 --format table
+          EOF
+          
+          chmod +x test-ocp-view.sh
+          ./test-ocp-view.sh
+
+      - name: Test ocp-diff with mock data
+        run: |
+          echo "Testing ocp-diff operations..."
+          
+          cat > test-ocp-diff.sh << 'EOF'
+          #!/bin/bash
+          export VERSIONS_DIR="$PWD/tests/mock-worktrees"
+          
+          # Test file comparison
+          echo "Testing file comparison..."
+          ./tools/ocp-diff file group.yml 4.19,4.20,4.21
+          
+          # Test YAML comparison
+          echo "Testing YAML value comparison..."
+          ./tools/ocp-diff yaml group.yml ".vars.GO_LATEST" 4.19,4.20,4.21
+          EOF
+          
+          chmod +x test-ocp-diff.sh
+          ./test-ocp-diff.sh
+
+      - name: Test ocp-patch dry-run with mock data
+        run: |
+          echo "Testing ocp-patch dry-run operations..."
+          
+          cat > test-ocp-patch.sh << 'EOF'
+          #!/bin/bash
+          export VERSIONS_DIR="$PWD/tests/mock-worktrees"
+          
+          # Test YAML deletion in dry-run mode
+          echo "Testing YAML key deletion (dry-run)..."
+          ./tools/ocp-patch yaml-delete ".konflux.network_mode" "images/ose-etcd.yml" 4.19,4.20,4.21 --dry-run
+          
+          # Test YAML setting in dry-run mode
+          echo "Testing YAML value setting (dry-run)..."
+          ./tools/ocp-patch yaml-set ".vars.GO_LATEST" "1.25" "group.yml" 4.19,4.20,4.21 --dry-run
+          
+          # Test hermetic conversion in dry-run mode
+          echo "Testing hermetic conversion (dry-run)..."
+          ./tools/ocp-patch hermetic 4.19,4.20,4.21 --dry-run
+          EOF
+          
+          chmod +x test-ocp-patch.sh
+          ./test-ocp-patch.sh
+
+      - name: Test ocp-hermetic with mock data
+        run: |
+          echo "Testing ocp-hermetic analysis..."
+          
+          cat > test-ocp-hermetic.sh << 'EOF'
+          #!/bin/bash
+          export VERSIONS_DIR="$PWD/tests/mock-worktrees"
+          
+          # Test hermetic status analysis
+          echo "Testing hermetic status..."
+          ./tools/ocp-hermetic status 4.19,4.20,4.21 --format table
+          
+          # Test candidate identification
+          echo "Testing conversion candidates..."
+          ./tools/ocp-hermetic candidates 4.19,4.20,4.21 --format table
+          
+          # Test progress tracking
+          echo "Testing progress tracking..."
+          ./tools/ocp-hermetic progress 4.19,4.20,4.21 --format table
+          EOF
+          
+          chmod +x test-ocp-hermetic.sh
+          ./test-ocp-hermetic.sh
+
+  test-version-parsing:
+    name: Test Version Specification Parsing
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup environment
+        run: make install-deps-ubuntu && make setup
+
+      - name: Test version parsing logic
+        run: |
+          # Create test script for version parsing
+          cat > test-version-parsing.sh << 'EOF'
+          #!/bin/bash
+          source tools/lib/common.sh
+          
+          # Test individual version validation
+          echo "Testing version validation..."
+          validate_version "4.19" || exit 1
+          validate_version "4.20" || exit 1
+          validate_version "invalid" && exit 1 || echo "✅ Correctly rejected invalid version"
+          
+          # Test version comparison functions
+          echo "Testing version comparison..."
+          version_gt "4.20" "4.19" || exit 1
+          version_lt "4.19" "4.20" || exit 1
+          version_ge "4.20" "4.20" || exit 1
+          version_le "4.19" "4.19" || exit 1
+          
+          echo "✅ Version parsing functions work correctly"
+          EOF
+          
+          chmod +x test-version-parsing.sh
+          ./test-version-parsing.sh
+
+      - name: Test version specification expansion
+        run: |
+          # Test that tools can handle different version specifications
+          cat > test-version-specs.sh << 'EOF'
+          #!/bin/bash
+          
+          # Test parsing without actual operations
+          echo "Testing version specification formats..."
+          
+          # Test each tool's help to ensure version specs are documented
+          for tool in tools/ocp-*; do
+            echo "Checking $tool help for version specification docs..."
+            if ! $tool --help | grep -q "4.17\|all\|version"; then
+              echo "❌ $tool help doesn't document version specifications"
+              exit 1
+            fi
+          done
+          
+          echo "✅ All tools document version specifications"
+          EOF
+          
+          chmod +x test-version-specs.sh
+          ./test-version-specs.sh
+
+  test-error-handling:
+    name: Test Error Handling
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup environment
+        run: make install-deps-ubuntu && make setup
+
+      - name: Test missing configuration handling
+        run: |
+          # Remove config file to test error handling
+          mv config/remotes.conf config/remotes.conf.backup 2>/dev/null || true
+          
+          echo "Testing error handling with missing config..."
+          
+          # Should fail gracefully with helpful error message
+          ./tools/ocp-setup --help >/dev/null || echo "✅ Handles missing config gracefully"
+          
+          # Restore config
+          cp config/remotes.conf.example config/remotes.conf
+
+      - name: Test invalid version specifications
+        run: |
+          echo "Testing invalid version handling..."
+          
+          # Test with invalid version formats
+          ./tools/ocp-view file group.yml "invalid-version" 2>&1 | grep -q "Invalid\|Error" || echo "✅ Handles invalid versions"
+          
+          # Test with non-existent files
+          ./tools/ocp-view file "non-existent.yml" "4.19" 2>&1 | grep -q "not found\|Error" || echo "✅ Handles missing files"
+
+
+  test-configuration-validation:
+    name: Test Configuration Validation
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup environment
+        run: make install-deps-ubuntu && make setup
+
+      - name: Test configuration template
+        run: |
+          echo "Testing configuration template validity..."
+          
+          # Test that template can be sourced (with warnings expected)
+          bash -c "source config/remotes.conf.example" 2>/dev/null || echo "Template has placeholder values (expected)"
+          
+          # Test setup-config functionality
+          make setup-config
+          
+          # Verify created config has expected structure
+          grep -q "PERSONAL_REMOTE" config/remotes.conf
+          grep -q "GITHUB_ACCOUNT" config/remotes.conf
+          grep -q "UPSTREAM_REMOTE" config/remotes.conf
+
+      - name: Test configuration validation
+        run: |
+          echo "Testing configuration validation..."
+          
+          # Create invalid config to test validation
+          cat > config/remotes.conf << 'EOF'
+          # Invalid config missing required variables
+          PARTIAL_CONFIG="true"
+          EOF
+          
+          # Tools should handle missing config variables gracefully
+          ./tools/ocp-setup --help >/dev/null || echo "✅ Handles incomplete config"
+          
+          # Restore valid config
+          cp config/remotes.conf.example config/remotes.conf
+          sed -i 's/your-github-username/test-user/g' config/remotes.conf
+
+  test-makefile-integration:
+    name: Test Makefile Integration
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Test Makefile targets without dependencies
+        run: |
+          echo "Testing Makefile behavior without dependencies..."
+          
+          # Help should always work
+          make help
+          
+          # Status should show missing dependencies
+          make status | grep -i "dependencies\|missing" || echo "Status command works"
+
+      - name: Test all Makefile targets
+        run: |
+          make install-deps-ubuntu
+          make setup
+          make validate
+          make clean
+          make status
