@@ -386,7 +386,7 @@ report_command() {
     # Collect all unique open images
     local temp_dir
     temp_dir="$(mktemp -d)"
-    trap 'rm -rf "$temp_dir"' EXIT
+    trap 'if [[ -n "${temp_dir:-}" ]]; then rm -rf "$temp_dir"; fi' EXIT
     
     for version in "${versions[@]}"; do
         local version_dir
@@ -701,16 +701,24 @@ show_status_csv() {
 show_candidates_table() {
     local versions=("$@")
     
-    # Collect all open images across versions
+    # Collect all open images and all existing images across versions
     local temp_dir
     temp_dir="$(mktemp -d)"
-    trap 'rm -rf "$temp_dir"' EXIT
+    trap 'if [[ -n "${temp_dir:-}" ]]; then rm -rf "$temp_dir"; fi' EXIT
     
     for version in "${versions[@]}"; do
         local version_dir
         version_dir="$(get_version_dir "$version")"
         
         if [[ -d "$version_dir/images" ]]; then
+            # Track all existing images
+            find "$version_dir/images" -name "*.yml" -type f | while read -r file; do
+                local filename
+                filename="$(basename "$file" .yml)"
+                echo "$filename"
+            done > "$temp_dir/all_$version"
+            
+            # Track images with network_mode: open
             find "$version_dir/images" -name "*.yml" -type f | while read -r file; do
                 if yaml_has "$file" ".konflux.network_mode"; then
                     local mode
@@ -723,11 +731,12 @@ show_candidates_table() {
                 fi
             done > "$temp_dir/open_$version"
         else
+            touch "$temp_dir/all_$version"
             touch "$temp_dir/open_$version"
         fi
     done
     
-    # Get unique list
+    # Get unique list of images that have network_mode: open in any version
     cat "$temp_dir"/open_* 2>/dev/null | sort -u > "$temp_dir/all_open"
     
     if [[ ! -s "$temp_dir/all_open" ]]; then
@@ -735,26 +744,33 @@ show_candidates_table() {
         return 0
     fi
     
-    printf "%-35s" "IMAGE"
+    printf "%-52s" "IMAGE"
     for version in "${versions[@]}"; do
         printf " %-8s" "$version"
     done
     echo
     
-    printf "%-35s" "---"
+    printf "%-52s" "---"
     for version in "${versions[@]}"; do
         printf " %-8s" "--------"
     done
     echo
     
     while IFS= read -r image; do
-        printf "%-35s" "$image"
+        printf "%-52s" "$image"
         
         for version in "${versions[@]}"; do
-            if grep -q "^$image$" "$temp_dir/open_$version" 2>/dev/null; then
-                printf " %-8s" "OPEN"
+            # Check if image exists in this version
+            if grep -q "^$image$" "$temp_dir/all_$version" 2>/dev/null; then
+                # Image exists - check if it's open or hermetic
+                if grep -q "^$image$" "$temp_dir/open_$version" 2>/dev/null; then
+                    printf " %-8s" "OPEN"
+                else
+                    printf " %-8s" "OK"
+                fi
             else
-                printf " %-8s" "✓"
+                # Image doesn't exist in this version
+                printf " %-8s" "-"
             fi
         done
         echo
@@ -832,7 +848,7 @@ show_missing_lockfiles_table() {
     # Check each version for hermetic images without lockfiles
     local temp_dir
     temp_dir="$(mktemp -d)"
-    trap 'rm -rf "$temp_dir"' EXIT
+    trap 'if [[ -n "${temp_dir:-}" ]]; then rm -rf "$temp_dir"; fi' EXIT
     
     for version in "${versions[@]}"; do
         local version_dir
