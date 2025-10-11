@@ -293,7 +293,7 @@ find_view_command() {
     # Collect all matching files
     local temp_dir
     temp_dir="$(mktemp -d)"
-    trap 'rm -rf "$temp_dir"' EXIT
+    trap 'if [[ -n "${temp_dir:-}" ]]; then rm -rf "$temp_dir"; fi' EXIT
     
     for version in "${versions[@]}"; do
         local version_dir

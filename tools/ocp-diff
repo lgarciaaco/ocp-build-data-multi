@@ -136,7 +136,7 @@ file_diff_command() {
     # Create temporary files for comparison
     local temp_dir
     temp_dir="$(mktemp -d)"
-    trap 'rm -rf "$temp_dir"' EXIT
+    trap 'if [[ -n "${temp_dir:-}" ]]; then rm -rf "$temp_dir"; fi' EXIT
     
     local available_versions=()
     
@@ -409,7 +409,7 @@ directory_diff_command() {
     # Collect all unique files across versions
     local temp_dir
     temp_dir="$(mktemp -d)"
-    trap 'rm -rf "$temp_dir"' EXIT
+    trap 'if [[ -n "${temp_dir:-}" ]]; then rm -rf "$temp_dir"; fi' EXIT
     
     for version in "${versions[@]}"; do
         local version_dir
