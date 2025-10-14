@@ -31,3 +31,6 @@ ehthumbs.db
 # Backup files
 *.bak
 *.backup
+
+# Test artifacts
+tests/mock-worktrees/
