@@ -16,66 +16,7 @@ yaml_get() {
     yq eval "$path" "$file" 2>/dev/null || echo "null"
 }
 
-# Set value in YAML file using yq
-yaml_set() {
-    local file="$1"
-    local path="$2"
-    local value="$3"
-    local backup="${4:-true}"
-    
-    if [[ ! -f "$file" ]]; then
-        log_error "File not found: $file"
-        return 1
-    fi
-    
-    # Create backup if requested
-    if [[ "$backup" == "true" ]]; then
-        cp "$file" "${file}.bak"
-    fi
-    
-    # Apply the change
-    if yq eval "${path} = \"${value}\"" -i "$file"; then
-        log_debug "Updated $path in $file to: $value"
-        return 0
-    else
-        log_error "Failed to update $path in $file"
-        # Restore backup if operation failed
-        if [[ "$backup" == "true" && -f "${file}.bak" ]]; then
-            mv "${file}.bak" "$file"
-        fi
-        return 1
-    fi
-}
 
-# Delete a key from YAML file
-yaml_delete() {
-    local file="$1"
-    local path="$2"
-    local backup="${3:-true}"
-    
-    if [[ ! -f "$file" ]]; then
-        log_error "File not found: $file"
-        return 1
-    fi
-    
-    # Create backup if requested
-    if [[ "$backup" == "true" ]]; then
-        cp "$file" "${file}.bak"
-    fi
-    
-    # Delete the key
-    if yq eval "del($path)" -i "$file"; then
-        log_debug "Deleted $path from $file"
-        return 0
-    else
-        log_error "Failed to delete $path from $file"
-        # Restore backup if operation failed
-        if [[ "$backup" == "true" && -f "${file}.bak" ]]; then
-            mv "${file}.bak" "$file"
-        fi
-        return 1
-    fi
-}
 
 # Check if a path exists in YAML file
 yaml_has() {
@@ -159,7 +100,7 @@ yaml_find() {
         
         log_info "Checking version $version..."
         
-        find "$version_dir" -name "$file_pattern" -type f | while read -r file; do
+        find "$version_dir" -path "*/$file_pattern" -type f | while read -r file; do
             local value
             value="$(yaml_get "$file" "$yaml_path")"
             
@@ -171,74 +112,6 @@ yaml_find() {
     done
 }
 
-# Apply YAML transformation across versions
-yaml_transform() {
-    local file_pattern="$1"
-    local yaml_path="$2"
-    local operation="$3"  # set, delete, or script
-    local value="$4"      # value for set operation or script content
-    local versions=("${@:5}")
-    local dry_run="${DRY_RUN:-false}"
-    
-    if [[ ${#versions[@]} -eq 0 ]]; then
-        read -ra versions <<< "$ACTIVE_VERSIONS"
-    fi
-    
-    log_info "Applying YAML transformation to $file_pattern"
-    log_info "Operation: $operation on path $yaml_path"
-    
-    for version in "${versions[@]}"; do
-        local version_dir
-        version_dir="$(get_version_dir "$version")"
-        
-        if [[ ! -d "$version_dir" ]]; then
-            log_warning "Worktree for version $version does not exist, skipping"
-            continue
-        fi
-        
-        log_info "Processing version $version..."
-        
-        find "$version_dir" -name "$file_pattern" -type f | while read -r file; do
-            local relative_path="${file#"$version_dir"/}"
-            
-            # Check if the path exists in the file
-            if [[ "$operation" != "set" ]] && ! yaml_has "$file" "$yaml_path"; then
-                log_debug "Path $yaml_path not found in $relative_path, skipping"
-                continue
-            fi
-            
-            log_info "  $relative_path"
-            
-            if [[ "$dry_run" == "true" ]]; then
-                local current_value
-                current_value="$(yaml_get "$file" "$yaml_path")"
-                echo "    Would $operation $yaml_path (current: $current_value)"
-                continue
-            fi
-            
-            case "$operation" in
-                "set")
-                    yaml_set "$file" "$yaml_path" "$value"
-                    ;;
-                "delete")
-                    yaml_delete "$file" "$yaml_path"
-                    ;;
-                "script")
-                    # Execute custom yq script
-                    if yq eval "$value" -i "$file"; then
-                        log_debug "Applied custom script to $relative_path"
-                    else
-                        log_error "Failed to apply script to $relative_path"
-                    fi
-                    ;;
-                *)
-                    log_error "Unknown operation: $operation"
-                    return 1
-                    ;;
-            esac
-        done
-    done
-}
 
 # Validate YAML syntax
 yaml_validate() {

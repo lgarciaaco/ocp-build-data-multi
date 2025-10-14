@@ -95,7 +95,6 @@ jobs:
         run: |
           echo "Testing dry-run functionality..."
           
-          ./tools/ocp-patch --help | grep -q "dry-run" || echo "ocp-patch supports dry-run"
           ./tools/ocp-bulk --help | grep -q "dry-run" || echo "ocp-bulk supports dry-run"
           
           echo "✅ Dry-run modes are available"

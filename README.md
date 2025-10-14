@@ -488,9 +488,27 @@ ocp-hermetic --help
 
 ## Local Testing
 
-Before submitting PRs, you can run local tests to ensure code quality and catch issues early:
+### 🚀 Run All Tests (Recommended)
 
-### Code Quality Checks
+**Always run this before pushing:**
+
+```bash
+./test-local.sh
+```
+
+This comprehensive test runner executes all the same tests that CI runs:
+
+- ✅ Dependency validation
+- ✅ Tool functionality verification  
+- ✅ Help text validation
+- ✅ Configuration tests
+- ✅ Linting (if tools available)
+
+### Individual Test Categories
+
+Before submitting PRs, you can also run individual test categories:
+
+#### Code Quality Checks
 
 ```bash
 # Run all linting checks (ShellCheck + markdownlint)

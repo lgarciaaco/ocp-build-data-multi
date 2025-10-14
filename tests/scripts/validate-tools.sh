@@ -146,18 +146,6 @@ run_test_with_output "ocp-hermetic candidates" \
 run_test "ocp-hermetic progress" \
     "./tools/ocp-hermetic progress $TEST_VERSIONS --format table"
 
-echo ""
-log_info "=== Testing ocp-patch (dry-run) ==="
-
-# Test YAML operations in dry-run mode
-run_test "ocp-patch yaml-delete (dry-run)" \
-    "./tools/ocp-patch yaml-delete '.konflux.network_mode' 'images/ose-etcd.yml' $TEST_VERSIONS --dry-run"
-
-run_test "ocp-patch yaml-set (dry-run)" \
-    "./tools/ocp-patch yaml-set '.vars.GO_LATEST' '1.25' 'group.yml' $TEST_VERSIONS --dry-run"
-
-run_test "ocp-patch hermetic (dry-run)" \
-    "./tools/ocp-patch hermetic $TEST_VERSIONS --dry-run"
 
 echo ""
 log_info "=== Testing Version Specifications ==="

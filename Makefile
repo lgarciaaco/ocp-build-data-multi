@@ -120,8 +120,6 @@ validate: check-deps ## Validate that all tools are working correctly
 	@echo "Validating toolset..."
 	@./tools/ocp-setup --help >/dev/null || { echo "❌ ocp-setup not working"; exit 1; }
 	@echo "✅ ocp-setup working"
-	@./tools/ocp-patch --help >/dev/null || { echo "❌ ocp-patch not working"; exit 1; }
-	@echo "✅ ocp-patch working"
 	@./tools/ocp-diff --help >/dev/null || { echo "❌ ocp-diff not working"; exit 1; }
 	@echo "✅ ocp-diff working"
 	@./tools/ocp-view --help >/dev/null || { echo "❌ ocp-view not working"; exit 1; }
