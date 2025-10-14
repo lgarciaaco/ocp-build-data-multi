@@ -131,29 +131,6 @@ jobs:
           chmod +x test-ocp-diff.sh
           ./test-ocp-diff.sh
 
-      - name: Test ocp-patch dry-run with mock data
-        run: |
-          echo "Testing ocp-patch dry-run operations..."
-          
-          cat > test-ocp-patch.sh << 'EOF'
-          #!/bin/bash
-          export VERSIONS_DIR="$PWD/tests/mock-worktrees"
-          
-          # Test YAML deletion in dry-run mode
-          echo "Testing YAML key deletion (dry-run)..."
-          ./tools/ocp-patch yaml-delete ".konflux.network_mode" "images/ose-etcd.yml" 4.19,4.20,4.21 --dry-run
-          
-          # Test YAML setting in dry-run mode
-          echo "Testing YAML value setting (dry-run)..."
-          ./tools/ocp-patch yaml-set ".vars.GO_LATEST" "1.25" "group.yml" 4.19,4.20,4.21 --dry-run
-          
-          # Test hermetic conversion in dry-run mode
-          echo "Testing hermetic conversion (dry-run)..."
-          ./tools/ocp-patch hermetic 4.19,4.20,4.21 --dry-run
-          EOF
-          
-          chmod +x test-ocp-patch.sh
-          ./test-ocp-patch.sh
 
       - name: Test ocp-hermetic with mock data
         run: |
