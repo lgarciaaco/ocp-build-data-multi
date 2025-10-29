@@ -15,7 +15,7 @@ source "$SCRIPT_DIR/lib/yaml-utils.sh"
 # Default values
 VERBOSE=false
 DEBUG=false
-OUTPUT_FORMAT="side-by-side"
+OUTPUT_FORMAT="default"
 CONTEXT_LINES=3
 IGNORE_WHITESPACE=false
 COMMAND=""
@@ -37,7 +37,9 @@ COMMANDS:
     directory <dir-path> [versions]       Compare directory contents
 
 OPTIONS:
-    -f, --format <format>     Output format: side-by-side, unified, table (default: side-by-side)
+    -f, --format <format>     Output format:
+                              For file diffs: side-by-side, unified, table (default: side-by-side)
+                              For yaml: default, side-by-side, compact (default: default)
     -c, --context <lines>     Number of context lines for diffs (default: 3)
     -w, --ignore-whitespace   Ignore whitespace differences
     -v, --verbose             Enable verbose output
@@ -50,6 +52,10 @@ EXAMPLES:
 
     # Compare YAML values across versions
     ocp-diff yaml group.yml ".vars.GO_LATEST" 4.17..4.21
+    
+    # Compare YAML values with different formats
+    ocp-diff yaml group.yml ".konflux.cachi2.lockfile" 4.12,4.14 --format side-by-side
+    ocp-diff yaml group.yml ".vars.GO_LATEST" all --format compact
 
     # Check golang versions across all active versions
     ocp-diff golang-versions
@@ -196,10 +202,24 @@ yaml_diff_command() {
         readarray -t versions < <(parse_version_range "$versions_spec")
     fi
     
-    log_info "Comparing $yaml_path in $file_path across versions"
-    echo
-    
-    yaml_compare "$file_path" "$yaml_path" "${versions[@]}"
+    # Choose comparison function based on format
+    [[ "$DEBUG" == "true" ]] && echo "DEBUG: OUTPUT_FORMAT='$OUTPUT_FORMAT', versions=${#versions[@]}"
+    case "$OUTPUT_FORMAT" in
+        "side-by-side")
+            if [[ ${#versions[@]} -eq 2 ]]; then
+                yaml_compare_side_by_side "$file_path" "$yaml_path" "${versions[@]}"
+            else
+                log_warning "Side-by-side format requires exactly 2 versions, falling back to default"
+                yaml_compare "$file_path" "$yaml_path" "${versions[@]}"
+            fi
+            ;;
+        "compact")
+            yaml_compare_table "$file_path" "$yaml_path" "${versions[@]}"
+            ;;
+        "default"|"table"|*)
+            yaml_compare "$file_path" "$yaml_path" "${versions[@]}"
+            ;;
+    esac
 }
 
 # Golang version comparison
