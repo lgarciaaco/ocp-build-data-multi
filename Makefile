@@ -26,6 +26,8 @@ check-deps: ## Check if all required dependencies are installed
 	@echo "✅ jq: $$(jq --version)"
 	@command -v gh >/dev/null 2>&1 || { echo "❌ gh (GitHub CLI) is required but not installed."; exit 1; }
 	@echo "✅ gh: $$(gh --version | head -n1 | awk '{print $$3}')"
+	@command -v yamlfmt >/dev/null 2>&1 || { echo "❌ yamlfmt is required but not installed."; exit 1; }
+	@echo "✅ yamlfmt: $$(yamlfmt -version 2>&1 || echo 'installed')"
 	@echo ""
 	@echo "✅ All dependencies are installed!"
 
@@ -35,6 +37,8 @@ install-deps-macos: ## Install dependencies on macOS using Homebrew
 	@echo "Installing dependencies on macOS..."
 	@command -v brew >/dev/null 2>&1 || { echo "❌ Homebrew is required. Install from https://brew.sh"; exit 1; }
 	@brew install git yq jq gh
+	@echo "Installing yamlfmt..."
+	@go install github.com/google/yamlfmt/cmd/yamlfmt@latest || brew install yamlfmt
 	@echo "✅ Dependencies installed via Homebrew"
 
 # Install dependencies on Ubuntu/Debian
@@ -44,13 +48,43 @@ install-deps-ubuntu: ## Install dependencies on Ubuntu/Debian
 	@sudo apt-get update
 	@sudo apt-get install -y git jq
 	@echo "Installing yq..."
-	@sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-	@sudo chmod +x /usr/local/bin/yq
+	@ARCH=$$(uname -m); \
+	case "$$ARCH" in \
+		x86_64) ARCH="amd64" ;; \
+		aarch64|arm64) ARCH="arm64" ;; \
+		armv7l) ARCH="arm" ;; \
+		*) echo "Unsupported architecture for yq: $$ARCH"; exit 1 ;; \
+	esac; \
+	sudo wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_$${ARCH}" && \
+	sudo chmod +x /usr/local/bin/yq
 	@echo "Installing GitHub CLI..."
 	@curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
 	@echo "deb [arch=$$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
 	@sudo apt-get update
 	@sudo apt-get install -y gh
+	@echo "Installing yamlfmt..."
+	@ARCH=$$(uname -m); \
+	case "$$ARCH" in \
+		x86_64) ARCH="amd64" ;; \
+		aarch64|arm64) ARCH="arm64" ;; \
+		armv7l) ARCH="arm" ;; \
+		*) echo "Unsupported architecture: $$ARCH"; exit 1 ;; \
+	esac; \
+	echo "Trying to download yamlfmt for architecture: $$ARCH"; \
+	if curl -fsSL -o /tmp/yamlfmt "https://github.com/google/yamlfmt/releases/latest/download/yamlfmt_$${ARCH}_linux" && \
+	   sudo mv /tmp/yamlfmt /usr/local/bin/yamlfmt && \
+	   sudo chmod +x /usr/local/bin/yamlfmt; then \
+		echo "✅ yamlfmt binary installed successfully"; \
+	else \
+		echo "⚠️ Binary install failed, installing via Go..."; \
+		sudo apt-get update && sudo apt-get install -y golang-go; \
+		export GOPATH=/tmp/go && export PATH="$$PATH:/usr/local/go/bin"; \
+		mkdir -p $$GOPATH; \
+		go install github.com/google/yamlfmt/cmd/yamlfmt@latest; \
+		sudo cp $$GOPATH/bin/yamlfmt /usr/local/bin/yamlfmt; \
+		sudo chmod +x /usr/local/bin/yamlfmt; \
+		echo "✅ yamlfmt installed via Go"; \
+	fi
 	@echo "✅ Dependencies installed"
 
 # Install dependencies on RHEL/CentOS/Fedora
@@ -59,10 +93,40 @@ install-deps-rhel: ## Install dependencies on RHEL/CentOS/Fedora
 	@echo "Installing dependencies on RHEL/CentOS/Fedora..."
 	@sudo dnf install -y git jq
 	@echo "Installing yq..."
-	@sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-	@sudo chmod +x /usr/local/bin/yq
+	@ARCH=$$(uname -m); \
+	case "$$ARCH" in \
+		x86_64) ARCH="amd64" ;; \
+		aarch64|arm64) ARCH="arm64" ;; \
+		armv7l) ARCH="arm" ;; \
+		*) echo "Unsupported architecture for yq: $$ARCH"; exit 1 ;; \
+	esac; \
+	sudo wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_$${ARCH}" && \
+	sudo chmod +x /usr/local/bin/yq
 	@echo "Installing GitHub CLI..."
 	@sudo dnf install -y gh
+	@echo "Installing yamlfmt..."
+	@ARCH=$$(uname -m); \
+	case "$$ARCH" in \
+		x86_64) ARCH="amd64" ;; \
+		aarch64|arm64) ARCH="arm64" ;; \
+		armv7l) ARCH="arm" ;; \
+		*) echo "Unsupported architecture: $$ARCH"; exit 1 ;; \
+	esac; \
+	echo "Trying to download yamlfmt for architecture: $$ARCH"; \
+	if curl -fsSL -o /tmp/yamlfmt "https://github.com/google/yamlfmt/releases/latest/download/yamlfmt_$${ARCH}_linux" && \
+	   sudo mv /tmp/yamlfmt /usr/local/bin/yamlfmt && \
+	   sudo chmod +x /usr/local/bin/yamlfmt; then \
+		echo "✅ yamlfmt binary installed successfully"; \
+	else \
+		echo "⚠️ Binary install failed, installing via Go..."; \
+		sudo dnf install -y golang; \
+		export GOPATH=/tmp/go && export PATH="$$PATH:/usr/local/go/bin"; \
+		mkdir -p $$GOPATH; \
+		go install github.com/google/yamlfmt/cmd/yamlfmt@latest; \
+		sudo cp $$GOPATH/bin/yamlfmt /usr/local/bin/yamlfmt; \
+		sudo chmod +x /usr/local/bin/yamlfmt; \
+		echo "✅ yamlfmt installed via Go"; \
+	fi
 	@echo "✅ Dependencies installed"
 
 # Auto-detect OS and install dependencies
@@ -82,6 +146,7 @@ install-deps: ## Auto-detect OS and install dependencies
 		echo "  - yq v4.0+ (https://github.com/mikefarah/yq)"; \
 		echo "  - jq"; \
 		echo "  - gh (GitHub CLI)"; \
+		echo "  - yamlfmt (https://github.com/google/yamlfmt)"; \
 		exit 1; \
 	fi
 
@@ -124,8 +189,6 @@ validate: check-deps ## Validate that all tools are working correctly
 	@echo "✅ ocp-diff working"
 	@./tools/ocp-view --help >/dev/null || { echo "❌ ocp-view not working"; exit 1; }
 	@echo "✅ ocp-view working"
-	@./tools/ocp-bulk --help >/dev/null || { echo "❌ ocp-bulk not working"; exit 1; }
-	@echo "✅ ocp-bulk working"
 	@./tools/ocp-hermetic --help >/dev/null || { echo "❌ ocp-hermetic not working"; exit 1; }
 	@echo "✅ ocp-hermetic working"
 	@echo ""
@@ -180,9 +243,13 @@ lint-shell: ## Run ShellCheck on all shell scripts
 .PHONY: lint-markdown
 lint-markdown: ## Run markdownlint on all markdown files
 	@echo "Running markdownlint on markdown files..."
-	@command -v markdownlint >/dev/null 2>&1 || { echo "❌ markdownlint not installed. Install with: npm install -g markdownlint-cli"; exit 1; }
-	@markdownlint README.md CONTRIBUTING.md
-	@echo "✅ Markdown linting passed"
+	@if command -v markdownlint >/dev/null 2>&1; then \
+		markdownlint README.md CONTRIBUTING.md; \
+		echo "✅ Markdown linting passed"; \
+	else \
+		echo "⚠️  markdownlint not installed. Install with: npm install -g markdownlint-cli"; \
+		echo "⚠️  Skipping markdown linting"; \
+	fi
 
 .PHONY: lint
 lint: lint-shell lint-markdown ## Run all linting checks

@@ -24,7 +24,6 @@ ocp-build-data-multi/
 │   ├── ocp-patch         # Multi-version patching
 │   ├── ocp-diff          # Cross-version comparisons
 │   ├── ocp-view          # Multi-version file viewing
-│   ├── ocp-bulk          # Bulk git operations
 │   └── ocp-hermetic      # Hermetic conversion tracking
 └── versions/               # Version-specific directories
     ├── 4.21/              # Current development version
@@ -58,7 +57,6 @@ make install-deps           # Install missing dependencies
 ./tools/ocp-diff golang-versions all                    # Compare golang versions
 ./tools/ocp-patch hermetic 4.19,4.20,4.21             # Convert to hermetic builds
 ./tools/ocp-view file group.yml 4.17..4.21             # View files across versions
-./tools/ocp-bulk commit "Message" 4.19+                # Bulk git operations
 ```
 
 ### Version Specifications
@@ -111,8 +109,6 @@ All builds support: x86_64, aarch64, ppc64le, s390x
 # Verify conversion
 ./tools/ocp-hermetic progress 4.19+
 
-# Commit changes
-./tools/ocp-bulk commit "Convert to hermetic builds" 4.19+
 ```
 
 ### Cross-Version Analysis
@@ -138,12 +134,9 @@ All builds support: x86_64, aarch64, ppc64le, s390x
 
 ### Validation Commands
 ```bash
-# Validate YAML syntax
-./tools/ocp-bulk validate all
 
 # Dry run mode for all modification commands
 ./tools/ocp-patch hermetic 4.19+ --dry-run
-./tools/ocp-bulk commit "Test" all --dry-run
 ```
 
 ## Dependencies

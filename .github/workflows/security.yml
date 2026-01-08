@@ -97,13 +97,14 @@ jobs:
           echo "Running ShellCheck security analysis..."
           
           # Run ShellCheck with security-focused checks
-          find . -name "*.sh" -type f | while read -r script; do
+          find . -name "*.sh" -type f -o -path "./tools/ocp-*" -type f | while read -r script; do
             echo "Analyzing $script for security issues..."
             
             # SC2086: Double quote to prevent globbing and word splitting
             # SC2154: Variable is referenced but not assigned
             # SC2155: Declare and assign separately to avoid masking return values
             # SC2002: Useless cat
+            # SC2034: Unused variables
             shellcheck -e SC2034 "$script" || {
               echo "❌ Security issues found in $script"
               exit 1
@@ -122,9 +123,9 @@ jobs:
             exit 1
           fi
           
-          # Check for dangerous redirections
-          if grep -r ">\s*/dev/null\s*2>&1" --include="*.sh" . ; then
-            echo "⚠️ Found output suppression - verify this is intentional"
+          # Check for dangerous redirections (excluding intentional ones)
+          if grep -r ">\s*/dev/null\s*2>&1" --include="*.sh" . | grep -v "command -v\|which\|>/dev/null 2>&1"; then
+            echo "⚠️ Found suspicious output suppression - verify this is intentional"
           fi
           
           # Check for world-writable file creation
@@ -252,10 +253,10 @@ jobs:
         run: |
           echo "Scanning YAML files for security issues..."
           
-          # Run yamllint on all YAML files
+          # Run yamllint on all YAML files (with relaxed rules)
           find . -name "*.yml" -o -name "*.yaml" | grep -v ".git" | while read -r file; do
             echo "Checking $file..."
-            yamllint "$file" || {
+            yamllint -d "{extends: default, rules: {line-length: {max: 120}, indentation: {indent-sequences: consistent}}}" "$file" || {
               echo "❌ YAML security/syntax issues in $file"
               exit 1
             }

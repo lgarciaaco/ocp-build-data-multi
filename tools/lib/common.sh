@@ -198,3 +198,19 @@ Examples:
   all            - Apply to all active versions
 EOF
 }
+
+# Generate random string of specified length
+generate_random_string() {
+    local length="${1:-4}"
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -hex "$length" | head -c "$length"
+    else
+        # Fallback using bash built-in RANDOM
+        local chars="abcdefghijklmnopqrstuvwxyz0123456789"
+        local result=""
+        for ((i=0; i<length; i++)); do
+            result+="${chars:$((RANDOM % ${#chars})):1}"
+        done
+        echo "$result"
+    fi
+}

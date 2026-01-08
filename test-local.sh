@@ -115,7 +115,6 @@ echo ""
 
 # 8. Dry-run Support
 log_info "=== Dry-run Support ==="
-run_test "ocp-bulk supports dry-run" "./tools/ocp-bulk --help | grep -q 'dry-run'"
 run_test "ocp-hermetic supports dry-run" "./tools/ocp-hermetic --help | grep -q 'dry-run'"
 echo ""
 

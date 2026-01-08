@@ -26,7 +26,7 @@ ocp-build-data-multi/
 │   ├── ocp-patch         # Multi-version patching
 │   ├── ocp-diff          # Cross-version comparisons
 │   ├── ocp-view          # Multi-version file viewing
-│   ├── ocp-bulk          # Bulk git operations
+│   ├── ocp-migrate       # Hermetic build migration
 │   └── ocp-hermetic      # Hermetic conversion tracking
 └── worktrees/             # Git worktrees for each version
     ├── v4.17/
@@ -114,9 +114,6 @@ cd ocp-build-data-multi
 ./tools/ocp-view file group.yml 4.17..4.21
 ./tools/ocp-view yaml group.yml ".vars.GO_LATEST" all
 
-# Bulk git operations
-./tools/ocp-bulk status all
-./tools/ocp-bulk commit "Remove network_mode for hermetic builds" 4.19+
 ```
 
 **Note**: All examples assume you're in the `ocp-build-data-multi` directory.
@@ -220,34 +217,25 @@ ocp-view summary 4.17..4.21
 - `--format columns` - Column-based output
 - `--format json` - JSON format for scripting
 
-### ocp-bulk - Bulk Git Operations
+### ocp-migrate - Hermetic Build Migration
 
-Perform git operations across multiple version worktrees.
+Migrate hermetic build configurations between OpenShift versions. Identifies images that are hermetic in source versions but still open in target versions, then applies the complete set of configuration changes needed.
 
 ```bash
-# Commit changes across versions
-ocp-bulk commit "Remove network_mode for hermetic builds" 4.19,4.20,4.21
+# Detect images needing migration from 4.19 to 4.18
+ocp-migrate detect 4.19 4.18
 
-# Push changes to personal remote
-ocp-bulk push 4.19+
+# Show what changes would be applied to a specific image
+ocp-migrate diff multus-cni 4.19 4.18
 
-# Create branches across versions
-ocp-bulk branch hermetic-conversion 4.19,4.20,4.21
+# Apply migration for a single image (with dry-run option)
+ocp-migrate apply multus-cni 4.19 4.18 --dry-run
 
-# Checkout branches
-ocp-bulk checkout hermetic-conversion 4.19+
+# Migrate all detected candidates
+ocp-migrate bulk 4.19 4.18
 
-# Check git status
-ocp-bulk status all
-
-# Pull latest changes
-ocp-bulk pull 4.20,4.21
-
-# Reset changes (with confirmation)
-ocp-bulk reset --hard 4.19,4.20
-
-# Validate YAML syntax
-ocp-bulk validate all
+# Clean working directory
+ocp-migrate clean
 ```
 
 ### ocp-hermetic - Hermetic Conversion Tracking
@@ -330,8 +318,6 @@ ocp-patch hermetic 4.19,4.20,4.21
 # 4. Verify conversion
 ocp-hermetic progress 4.19+
 
-# 5. Commit changes
-ocp-bulk commit "Convert to hermetic builds" 4.19+
 
 # 6. Generate report
 ocp-hermetic report all
@@ -342,8 +328,6 @@ ocp-hermetic report all
 Implement a feature across multiple OpenShift versions:
 
 ```bash
-# 1. Create feature branches
-ocp-bulk branch new-feature 4.19,4.20,4.21
 
 # 2. Apply YAML changes
 ocp-patch yaml-set ".feature.enabled" "true" "images/*.yml" 4.19+
@@ -351,12 +335,7 @@ ocp-patch yaml-set ".feature.enabled" "true" "images/*.yml" 4.19+
 # 3. Check differences
 ocp-diff yaml images/component.yml ".feature.enabled" 4.19+
 
-# 4. Validate changes
-ocp-bulk validate 4.19+
 
-# 5. Commit and push
-ocp-bulk commit "Enable new feature" 4.19+
-ocp-bulk push 4.19+
 ```
 
 ### Version Analysis and Reporting
@@ -388,7 +367,6 @@ All modification commands support `--dry-run` to preview changes:
 
 ```bash
 ocp-patch hermetic 4.19+ --dry-run
-ocp-bulk commit "Test message" all --dry-run
 ```
 
 ### Debug and Verbose Output
@@ -457,11 +435,6 @@ ocp-diff golang-versions all --format table
    ocp-setup init
    ```
 
-5. **YAML syntax errors:**
-
-   ```bash
-   ocp-bulk validate all
-   ```
 
 6. **Git remote issues:**
 
@@ -482,7 +455,6 @@ ocp-setup --help
 ocp-patch --help
 ocp-diff --help
 ocp-view --help
-ocp-bulk --help
 ocp-hermetic --help
 ```
 
@@ -567,7 +539,6 @@ This toolset is designed for the OpenShift build data repository workflow. When 
 
 1. **Run local tests first**: `make pre-commit`
 2. Test changes with `--dry-run` first
-3. Validate YAML syntax with `ocp-bulk validate`
 4. Use descriptive commit messages
 5. Push to personal remotes, not origin
 
