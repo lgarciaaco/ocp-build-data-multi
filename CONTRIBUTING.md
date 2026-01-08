@@ -96,7 +96,6 @@ ocp-build-data-multi/
 │   ├── ocp-patch     # Multi-version patching
 │   ├── ocp-diff      # Cross-version comparisons  
 │   ├── ocp-view      # Multi-version file viewing
-│   ├── ocp-bulk      # Bulk git operations
 │   └── ocp-hermetic  # Hermetic conversion tracking
 ├── config/            # Configuration templates
 └── docs/              # Documentation

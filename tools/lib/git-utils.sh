@@ -312,3 +312,69 @@ show_worktree_status() {
         printf "%-8s %-12s %-15s %s\n" "$version" "$status" "$branch" "$changes"
     done
 }
+
+# Setup working directory as git repository
+setup_working_git() {
+    local working_dir="$1"
+    
+    log_debug "Setting up git repository in working directory: $working_dir"
+    
+    # Initialize git repository if it doesn't exist
+    if [[ ! -d "$working_dir/.git" ]]; then
+        log_info "Initializing git repository in working directory"
+        git -C "$working_dir" init --quiet
+    fi
+    
+    # Configure remotes
+    (
+        cd "$working_dir" || return 1
+        
+        # Add origin remote if it doesn't exist
+        if ! git remote | grep -q "^origin$"; then
+            log_debug "Adding origin remote"
+            git remote add origin "$UPSTREAM_URL"
+        fi
+        
+        # Add personal remote if it doesn't exist
+        if ! git remote | grep -q "^${PERSONAL_REMOTE}$"; then
+            log_debug "Adding personal remote $PERSONAL_REMOTE"
+            git remote add "$PERSONAL_REMOTE" "$PERSONAL_URL"
+        fi
+        
+        # Set up push remote
+        git config "remote.${PERSONAL_REMOTE}.pushurl" "$PERSONAL_URL"
+        
+        # Fetch remotes
+        log_debug "Fetching remotes"
+        git fetch origin --quiet
+        git fetch "$PERSONAL_REMOTE" --quiet 2>/dev/null || true
+    )
+    
+    log_success "Git repository setup completed"
+}
+
+# Create migration branch in working directory
+create_migration_branch() {
+    local working_dir="$1"
+    local target_version="$2"
+    local random_suffix
+    random_suffix="$(generate_random_string 4)"
+    local branch_name="hermetic-migration-openshift-${target_version}-${random_suffix}"
+    local base_branch="openshift-${target_version}"
+    
+    log_info "Creating migration branch: $branch_name"
+    
+    (
+        cd "$working_dir" || return 1
+        
+        # Checkout base branch from origin
+        if ! git checkout -b "$branch_name" "origin/$base_branch" --quiet; then
+            log_error "Failed to create branch $branch_name from origin/$base_branch"
+            return 1
+        fi
+        
+        log_success "Created migration branch: $branch_name"
+    )
+    
+    echo "$branch_name"
+}

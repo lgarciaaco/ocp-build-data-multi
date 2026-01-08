@@ -26,6 +26,8 @@ check-deps: ## Check if all required dependencies are installed
 	@echo "✅ jq: $$(jq --version)"
 	@command -v gh >/dev/null 2>&1 || { echo "❌ gh (GitHub CLI) is required but not installed."; exit 1; }
 	@echo "✅ gh: $$(gh --version | head -n1 | awk '{print $$3}')"
+	@command -v yamlfmt >/dev/null 2>&1 || { echo "❌ yamlfmt is required but not installed."; exit 1; }
+	@echo "✅ yamlfmt: $$(yamlfmt -version 2>&1 || echo 'installed')"
 	@echo ""
 	@echo "✅ All dependencies are installed!"
 
@@ -35,6 +37,8 @@ install-deps-macos: ## Install dependencies on macOS using Homebrew
 	@echo "Installing dependencies on macOS..."
 	@command -v brew >/dev/null 2>&1 || { echo "❌ Homebrew is required. Install from https://brew.sh"; exit 1; }
 	@brew install git yq jq gh
+	@echo "Installing yamlfmt..."
+	@go install github.com/google/yamlfmt/cmd/yamlfmt@latest || brew install yamlfmt
 	@echo "✅ Dependencies installed via Homebrew"
 
 # Install dependencies on Ubuntu/Debian
@@ -51,6 +55,9 @@ install-deps-ubuntu: ## Install dependencies on Ubuntu/Debian
 	@echo "deb [arch=$$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
 	@sudo apt-get update
 	@sudo apt-get install -y gh
+	@echo "Installing yamlfmt..."
+	@sudo wget -qO /usr/local/bin/yamlfmt https://github.com/google/yamlfmt/releases/latest/download/yamlfmt_$$(uname -m)_linux
+	@sudo chmod +x /usr/local/bin/yamlfmt
 	@echo "✅ Dependencies installed"
 
 # Install dependencies on RHEL/CentOS/Fedora
@@ -63,6 +70,9 @@ install-deps-rhel: ## Install dependencies on RHEL/CentOS/Fedora
 	@sudo chmod +x /usr/local/bin/yq
 	@echo "Installing GitHub CLI..."
 	@sudo dnf install -y gh
+	@echo "Installing yamlfmt..."
+	@sudo wget -qO /usr/local/bin/yamlfmt https://github.com/google/yamlfmt/releases/latest/download/yamlfmt_$$(uname -m)_linux
+	@sudo chmod +x /usr/local/bin/yamlfmt
 	@echo "✅ Dependencies installed"
 
 # Auto-detect OS and install dependencies
@@ -82,6 +92,7 @@ install-deps: ## Auto-detect OS and install dependencies
 		echo "  - yq v4.0+ (https://github.com/mikefarah/yq)"; \
 		echo "  - jq"; \
 		echo "  - gh (GitHub CLI)"; \
+		echo "  - yamlfmt (https://github.com/google/yamlfmt)"; \
 		exit 1; \
 	fi
 
@@ -124,8 +135,6 @@ validate: check-deps ## Validate that all tools are working correctly
 	@echo "✅ ocp-diff working"
 	@./tools/ocp-view --help >/dev/null || { echo "❌ ocp-view not working"; exit 1; }
 	@echo "✅ ocp-view working"
-	@./tools/ocp-bulk --help >/dev/null || { echo "❌ ocp-bulk not working"; exit 1; }
-	@echo "✅ ocp-bulk working"
 	@./tools/ocp-hermetic --help >/dev/null || { echo "❌ ocp-hermetic not working"; exit 1; }
 	@echo "✅ ocp-hermetic working"
 	@echo ""

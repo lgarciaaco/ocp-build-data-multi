@@ -6,6 +6,7 @@
 # Exclude upstream checked-out content
 # The versions/ directory contains git worktrees of the upstream ocp-build-data repository
 versions/
+working/
 
 # Personal configuration files
 # These contain user-specific GitHub account information

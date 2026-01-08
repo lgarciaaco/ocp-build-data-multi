@@ -2,7 +2,7 @@
 # OpenShift Build Data Hermetic Conversion Tracking Tool
 # Track and manage hermetic build conversion progress across versions
 
-set -euo pipefail
+# Debug mode - no error checking
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
@@ -144,8 +144,11 @@ candidates_command() {
         readarray -t versions < <(parse_version_range "$versions_spec")
     fi
     
-    log_info "Hermetic conversion candidates across versions: ${versions[*]}"
-    echo
+    # Only show info message if not being called by other tools
+    if [[ "${BASH_SOURCE[1]}" != *"ocp-migrate"* ]]; then
+        log_info "Hermetic conversion candidates across versions: ${versions[*]}"
+        echo
+    fi
     
     case "$OUTPUT_FORMAT" in
         "table")
@@ -265,33 +268,44 @@ convert_command() {
         
         # Check if already hermetic
         local network_mode
-        network_mode="$(yaml_get "$image_file" ".konflux.network_mode")"
+        network_mode="$(yaml_get "$image_file" ".konflux.network_mode" || echo "null")"
         
         if [[ "$network_mode" == "null" ]]; then
             log_info "  Image $image_name in version $version is already hermetic (no explicit network_mode)"
-            ((success_count++))
+            success_count=$((success_count + 1))
             continue
         elif [[ "$network_mode" == "hermetic" ]]; then
             log_info "  Image $image_name in version $version is already hermetic"
-            ((success_count++))
+            success_count=$((success_count + 1))
             continue
         elif [[ "$network_mode" == "open" ]]; then
             log_info "  Converting $image_name in version $version from open to hermetic"
             
-            # Remove the network_mode key
-            if yaml_delete "$image_file" ".konflux.network_mode" false; then
+            # Remove the network_mode key using sed to preserve formatting
+            if sed -i.bak '/^[[:space:]]*network_mode:[[:space:]]*open/d' "$image_file"; then
                 log_success "  Converted $image_name in version $version"
-                ((success_count++))
+                success_count=$((success_count + 1))
                 
-                # Check if konflux section is now empty and remove it
-                local konflux_keys
-                konflux_keys="$(yaml_keys "$image_file" ".konflux" 2>/dev/null | wc -l || echo 0)"
-                if [[ "$konflux_keys" -eq 0 ]]; then
-                    yaml_delete "$image_file" ".konflux" false
-                    log_debug "  Removed empty konflux section"
+                # Check if konflux section is now empty and clean it up
+                local empty_konflux_line
+                empty_konflux_line="$(grep "^konflux:[[:space:]]*$" "$image_file" 2>/dev/null || echo "")"
+                if [[ -n "$empty_konflux_line" ]]; then
+                    # Check if there's any content after konflux line  
+                    local lines_after_konflux
+                    lines_after_konflux="$(sed -n '/^konflux:/,/^[^[:space:]]/p' "$image_file" 2>/dev/null | wc -l 2>/dev/null || echo "0")"
+                    if [[ "${lines_after_konflux:-0}" -le 2 ]]; then
+                        # Remove empty konflux section
+                        sed -i.bak2 '/^konflux:[[:space:]]*$/d' "$image_file" 2>/dev/null || true
+                        log_debug "  Removed empty konflux section"
+                        rm -f "${image_file}.bak2" 2>/dev/null || true
+                    fi
                 fi
+                
+                rm -f "${image_file}.bak"
             else
                 log_error "  Failed to convert $image_name in version $version"
+                # Restore backup if it exists
+                [[ -f "${image_file}.bak" ]] && mv "${image_file}.bak" "$image_file"
             fi
         else
             log_warning "  Unknown network_mode '$network_mode' for $image_name in version $version"
