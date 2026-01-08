@@ -26,6 +26,7 @@ ocp-build-data-multi/
 │   ├── ocp-patch         # Multi-version patching
 │   ├── ocp-diff          # Cross-version comparisons
 │   ├── ocp-view          # Multi-version file viewing
+│   ├── ocp-migrate       # Hermetic build migration
 │   └── ocp-hermetic      # Hermetic conversion tracking
 └── worktrees/             # Git worktrees for each version
     ├── v4.17/
@@ -216,6 +217,26 @@ ocp-view summary 4.17..4.21
 - `--format columns` - Column-based output
 - `--format json` - JSON format for scripting
 
+### ocp-migrate - Hermetic Build Migration
+
+Migrate hermetic build configurations between OpenShift versions. Identifies images that are hermetic in source versions but still open in target versions, then applies the complete set of configuration changes needed.
+
+```bash
+# Detect images needing migration from 4.19 to 4.18
+ocp-migrate detect 4.19 4.18
+
+# Show what changes would be applied to a specific image
+ocp-migrate diff multus-cni 4.19 4.18
+
+# Apply migration for a single image (with dry-run option)
+ocp-migrate apply multus-cni 4.19 4.18 --dry-run
+
+# Migrate all detected candidates
+ocp-migrate bulk 4.19 4.18
+
+# Clean working directory
+ocp-migrate clean
+```
 
 ### ocp-hermetic - Hermetic Conversion Tracking
 

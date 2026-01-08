@@ -100,6 +100,7 @@ parse_args() {
                 ;;
             -f|--format)
                 OUTPUT_FORMAT="$2"
+                export OUTPUT_FORMAT
                 shift 2
                 ;;
             -n|--dry-run)
@@ -108,6 +109,7 @@ parse_args() {
                 ;;
             --force)
                 FORCE=true
+                export FORCE
                 shift
                 ;;
             -v|--verbose)
@@ -139,14 +141,14 @@ parse_args() {
 # Setup cleanup trap
 setup_cleanup_trap() {
     local cleanup_func="$1"
-    trap "$cleanup_func" EXIT INT TERM
+    trap '$cleanup_func' EXIT INT TERM
 }
 
 # Clean working directory
 clean_working_directory() {
     if [[ -d "$WORKING_DIR" ]]; then
         log_debug "Cleaning working directory: $WORKING_DIR"
-        rm -rf "$WORKING_DIR"/*
+        rm -rf "${WORKING_DIR:?}"/*
     fi
 }
 
@@ -182,9 +184,8 @@ create_working_directory_with_git() {
     log_debug "Creating working directory with git setup: $WORKING_DIR"
     mkdir -p "$WORKING_DIR"
     
-    # Setup git repository in the working directory (capture output)
-    local git_output
-    git_output=$(setup_working_git "$WORKING_DIR" 2>&1)
+    # Setup git repository in the working directory (suppress output)
+    setup_working_git "$WORKING_DIR" >/dev/null 2>&1
     
     # Create migration branch (capture output)
     local branch_name

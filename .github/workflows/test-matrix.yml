@@ -64,7 +64,7 @@ jobs:
           
           # Handle different version formats
           case "$BASH_VERSION" in
-            "4.0") DOWNLOAD_VERSION="4.0" ;;
+            "4.0") DOWNLOAD_VERSION="4.0.44" ;;
             "4.4") DOWNLOAD_VERSION="4.4.23" ;;
             "5.0") DOWNLOAD_VERSION="5.0.18" ;;
             "5.1") DOWNLOAD_VERSION="5.1.16" ;;
