@@ -148,15 +148,15 @@ setup_cleanup_trap() {
 clean_working_directory() {
     if [[ -d "$WORKING_DIR" ]]; then
         log_debug "Cleaning working directory: $WORKING_DIR"
-        rm -rf "${WORKING_DIR:?}"/*
+        rm -rf "${WORKING_DIR:?}"
     fi
+    mkdir -p "$WORKING_DIR"
 }
 
 # Create clean working directory
 create_working_directory() {
     clean_working_directory
-    log_debug "Creating clean working directory: $WORKING_DIR"
-    mkdir -p "$WORKING_DIR"
+    log_debug "Created clean working directory: $WORKING_DIR"
 }
 
 # Fix YAML formatting issues using yamlfmt
@@ -178,25 +178,34 @@ fix_yaml_formatting() {
 create_working_directory_with_git() {
     local target_version="$1"
     
-    # Clean and create the working directory (no version subdirectory)
+    # Clean and create the working directory
     clean_working_directory
     
     log_debug "Creating working directory with git setup: $WORKING_DIR"
-    mkdir -p "$WORKING_DIR"
     
-    # Setup git repository in the working directory (suppress output)
-    setup_working_git "$WORKING_DIR" >/dev/null 2>&1
+    # Setup git repository in the working directory with clean checkout
+    cd "$WORKING_DIR"
     
-    # Create migration branch (capture output)
-    local branch_name
-    branch_name=$(create_migration_branch "$WORKING_DIR" "$target_version" 2>/dev/null)
-    if [[ -z "$branch_name" ]]; then
-        log_error "Failed to create migration branch"
-        return 1
+    # Initialize fresh git repository
+    git init -q
+    
+    # Add remotes using configuration variables
+    git remote add origin "$UPSTREAM_URL"
+    if [[ -n "${PERSONAL_REMOTE:-}" && -n "${PERSONAL_URL:-}" ]]; then
+        git remote add "$PERSONAL_REMOTE" "$PERSONAL_URL"
     fi
     
-    log_info "Working directory ready with branch: $branch_name"
-    echo "$branch_name"
+    # Fetch the target branch
+    local target_branch="openshift-${target_version}"
+    log_debug "Fetching branch: $target_branch"
+    git fetch origin "$target_branch" -q
+    
+    # Create and checkout migration branch from clean remote state
+    local migration_branch="hermetic-migration-openshift-${target_version}-$(openssl rand -hex 4)"
+    git checkout -b "$migration_branch" "origin/$target_branch" -q
+    
+    log_info "Working directory ready with branch: $migration_branch"
+    echo "$migration_branch"
 }
 
 # Detect command - find migration candidates
@@ -292,6 +301,13 @@ apply_command() {
     local image_name="${args[0]}"
     local source_version="${args[1]}"
     local target_version="${args[2]}"
+    local bulk_mode="${args[3]:-false}"
+    
+    # Clean working directory only if not in bulk mode (standalone apply)
+    if [[ "$bulk_mode" != "true" ]]; then
+        log_info "Cleaning working directory for migration"
+        clean_working_directory
+    fi
     
     log_info "Applying migration for $image_name from $source_version to $target_version"
     
@@ -335,12 +351,11 @@ apply_command() {
         log_debug "Removing konflux section to enable hermetic mode"
         yq eval 'del(.konflux)' -i "$working_file"
     else
-        # Copy only the konflux section from source to target
+        # Copy konflux section from source to target using proper yq syntax
         log_debug "Copying konflux section from source"
-        local source_konflux
-        source_konflux=$(yq eval '.konflux' "$source_file")
-        if [[ "$source_konflux" != "null" ]]; then
-            yq eval ".konflux = $source_konflux" -i "$working_file"
+        if ! yq eval '.konflux = (load("'"$source_file"'") | .konflux)' -i "$working_file"; then
+            log_error "Failed to copy konflux section from source for $image_name"
+            return 1
         fi
     fi
     
@@ -373,6 +388,10 @@ bulk_command() {
     
     local source_version="${args[0]}"
     local target_versions="${args[1]}"
+    
+    # Ensure clean slate - remove any previous work
+    log_info "Cleaning working directory for fresh migration"
+    clean_working_directory
     
     log_info "Starting bulk migration from $source_version to $target_versions"
     
@@ -461,12 +480,7 @@ bulk_command() {
             log_info "DRY RUN: Would migrate $image_name"
             success_count=$i
         else
-            set +e  # Temporarily disable exit on error
-            apply_command "$image_name" "$source_version" "$target_versions"
-            local apply_result=$?
-            set -e  # Re-enable exit on error
-            
-            if [[ $apply_result -eq 0 ]]; then
+            if apply_command "$image_name" "$source_version" "$target_versions" "true"; then
                 success_count=$i
                 log_success "✓ $image_name migrated successfully"
             else

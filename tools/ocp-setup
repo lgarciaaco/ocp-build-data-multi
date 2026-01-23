@@ -128,22 +128,12 @@ clone_repository() {
 init_worktrees() {
     local versions=("$@")
     
-    # Check if main repository exists
-    local parent_dir
-    parent_dir="$(dirname "$MULTI_DIR")"
-    local repo_dir="$parent_dir/ocp-build-data"
+    # We're already in the correct repository (ocp-build-data-multi)
+    # which is configured with the proper remotes
     
-    if [[ ! -d "$repo_dir" ]]; then
-        log_error "Main repository not found. Run 'ocp-setup clone' first"
-        return 1
-    fi
-    
-    # Change to the main repository directory
-    cd "$repo_dir"
-    
-    # Fetch latest changes
+    # Fetch latest changes from upstream only
     log_info "Fetching latest changes from upstream"
-    git fetch --all
+    git fetch origin
     
     # Create versions directory if it doesn't exist
     mkdir -p "$VERSIONS_DIR"
@@ -163,13 +153,14 @@ init_worktrees() {
         fi
     done
     
-    log_info "Initialized $success_count of $total_count worktrees"
+    log_info "Processed $success_count of $total_count worktrees"
     
-    if [[ $success_count -eq $total_count ]]; then
-        log_success "All worktrees initialized successfully"
+    # Success means we either created or confirmed existing worktrees
+    if [[ $success_count -gt 0 ]]; then
+        log_success "Worktrees are ready"
         return 0
     else
-        log_warning "Some worktrees failed to initialize"
+        log_error "No worktrees were successfully processed"
         return 1
     fi
 }
