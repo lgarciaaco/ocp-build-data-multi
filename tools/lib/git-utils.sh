@@ -28,14 +28,11 @@ init_worktree() {
     fi
     
     # Create the worktree
-    if git worktree add "$version_dir" "$UPSTREAM_REMOTE/$branch_name" 2>/dev/null; then
+    if git worktree add "$version_dir" "$UPSTREAM_REMOTE/$branch_name"; then
         log_success "Created worktree for version $version at $version_dir"
         
-        # Configure remotes in the worktree
-        (
-            cd "$version_dir" || return || return
-            configure_remotes
-        )
+        # Don't automatically configure personal remotes
+        # They should only be added when actually working on changes
         
         return 0
     else
