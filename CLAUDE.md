@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is the OpenShift Build Data Multi-Version Toolset, designed for managing build metadata across multiple OpenShift Container Platform versions simultaneously using git worktrees. The repository contains:
 
-- **Version-specific configurations**: Each version (4.12-4.21) defines image builds, RPM packages, and release settings
+- **Version-specific configurations**: Each version (4.12-4.22) defines image builds, RPM packages, and release settings
 - **Multi-version management tools**: Command-line utilities for applying changes across versions without branch switching
 - **Hermetic build conversion tracking**: Tools for converting images from network mode to hermetic builds
 
@@ -21,17 +21,17 @@ ocp-build-data-multi/
 ├── tools/                  # Command-line utilities
 │   ├── lib/               # Shared libraries (common.sh, git-utils.sh, yaml-utils.sh)
 │   ├── ocp-setup         # Worktree management
-│   ├── ocp-patch         # Multi-version patching
+│   ├── ocp-migrate       # Multi-version migration and patching
 │   ├── ocp-diff          # Cross-version comparisons
 │   ├── ocp-view          # Multi-version file viewing
 │   └── ocp-hermetic      # Hermetic conversion tracking
 └── versions/               # Version-specific directories
-    ├── 4.21/              # Current development version
+    ├── 4.22/              # Current development version
     │   ├── group.yml      # Release-wide defaults
     │   ├── streams.yml    # Base image definitions
     │   ├── images/*.yml   # Individual image build configs
     │   └── rpms/*.yml     # RPM package configs
-    └── [4.12-4.20]/       # Older supported versions
+    └── [4.12-4.21]/       # Older supported versions
 ```
 
 ### Key Configuration Files
@@ -55,13 +55,13 @@ make install-deps           # Install missing dependencies
 
 # Cross-version operations
 ./tools/ocp-diff golang-versions all                    # Compare golang versions
-./tools/ocp-patch hermetic 4.19,4.20,4.21             # Convert to hermetic builds
-./tools/ocp-view file group.yml 4.17..4.21             # View files across versions
+./tools/ocp-migrate bulk 4.21 4.19,4.20               # Convert to hermetic builds
+./tools/ocp-view file group.yml 4.17..4.22             # View files across versions
 ```
 
 ### Version Specifications
-- **Specific versions**: `4.19,4.20,4.21`
-- **Version ranges**: `4.17..4.21` (inclusive)
+- **Specific versions**: `4.20,4.21,4.22`
+- **Version ranges**: `4.17..4.22` (inclusive)
 - **Version and above**: `4.19+`
 - **All active versions**: `all`
 
@@ -103,10 +103,13 @@ All builds support: x86_64, aarch64, ppc64le, s390x
 # Check current hermetic status
 ./tools/ocp-hermetic status 4.19+
 
-# Convert images to hermetic
-./tools/ocp-patch hermetic 4.19,4.20,4.21
+# Detect images needing migration from current to older versions
+./tools/ocp-migrate detect 4.22 4.19,4.20,4.21
 
-# Verify conversion
+# Migrate hermetic configs from source to target versions
+./tools/ocp-migrate bulk 4.22 4.19,4.20,4.21
+
+# Verify conversion progress
 ./tools/ocp-hermetic progress 4.19+
 
 ```
@@ -121,22 +124,30 @@ All builds support: x86_64, aarch64, ppc64le, s390x
 ./tools/ocp-view summary all --format table
 ```
 
-### YAML Modification
+### Migration Operations
 ```bash
-# Set values across versions
-./tools/ocp-patch yaml-set ".golang_version" "1.24" "images/*.yml" 4.19+
+# Show differences between versions for specific image
+./tools/ocp-migrate diff image-name 4.22 4.21
 
-# Delete keys
-./tools/ocp-patch yaml-delete ".konflux.network_mode" "images/component.yml" 4.19+
+# Apply migration for single image
+./tools/ocp-migrate apply image-name 4.22 4.21
+
+# Validate working directory changes
+./tools/ocp-migrate validate 4.21
 ```
 
 ## Testing and Validation
 
 ### Validation Commands
 ```bash
+# Dry run mode for all migration commands
+./tools/ocp-migrate bulk 4.22 4.19+ --dry-run
 
-# Dry run mode for all modification commands
-./tools/ocp-patch hermetic 4.19+ --dry-run
+# Check dependencies
+make check-deps
+
+# Validate tools are working
+make validate
 ```
 
 ## Dependencies
@@ -145,6 +156,8 @@ All builds support: x86_64, aarch64, ppc64le, s390x
 - **yq**: YAML processing (v4.0+)
 - **jq**: JSON processing  
 - **bash**: Shell scripting (v4.0+)
+- **gh**: GitHub CLI
+- **yamlfmt**: YAML formatting tool
 
 ## Important Notes
 
