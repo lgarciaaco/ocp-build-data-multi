@@ -214,3 +214,90 @@ generate_random_string() {
         echo "$result"
     fi
 }
+
+# Image filtering functions
+
+# Filter out CI images by filename pattern (ci-*.yml)
+filter_ci_images() {
+    grep -v '/ci-[^/]*\.yml$'
+}
+
+# Filter out non-payload images using YAML metadata
+# This reads from stdin and outputs filtered results
+filter_non_payload_images() {
+    # Load yaml utilities if not already loaded
+    if ! declare -f yaml_get >/dev/null 2>&1; then
+        source "$LIB_DIR/yaml-utils.sh"
+    fi
+    
+    while read -r file; do
+        if [[ -f "$file" ]]; then
+            local for_payload
+            for_payload="$(yaml_get "$file" ".for_payload" 2>/dev/null || echo "null")"
+            local for_release
+            for_release="$(yaml_get "$file" ".for_release" 2>/dev/null || echo "null")"
+            
+            # Include if for_payload is not explicitly false AND for_release is not explicitly false
+            if [[ "$for_payload" != "false" && "$for_release" != "false" ]]; then
+                echo "$file"
+            fi
+        fi
+    done
+}
+
+# Combined filter function for production images (excludes CI and non-payload)
+filter_production_images() {
+    filter_ci_images | filter_non_payload_images
+}
+
+# Get image files with optional filtering
+# Usage: get_image_files <version_dir> [--include-ci|--exclude-ci] [--include-non-payload|--exclude-non-payload]
+get_image_files() {
+    local version_dir="$1"
+    shift
+    
+    local include_ci=false
+    local include_non_payload=false
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --include-ci)
+                include_ci=true
+                shift
+                ;;
+            --exclude-ci)
+                include_ci=false
+                shift
+                ;;
+            --include-non-payload)
+                include_non_payload=true
+                shift
+                ;;
+            --exclude-non-payload)
+                include_non_payload=false
+                shift
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                return 1
+                ;;
+        esac
+    done
+    
+    if [[ ! -d "$version_dir/images" ]]; then
+        return 0
+    fi
+    
+    local image_files
+    image_files=$(find "$version_dir/images" -name "*.yml" -type f | sort)
+    
+    if [[ "$include_ci" == false ]]; then
+        image_files=$(echo "$image_files" | filter_ci_images)
+    fi
+    
+    if [[ "$include_non_payload" == false ]]; then
+        image_files=$(echo "$image_files" | filter_non_payload_images)
+    fi
+    
+    echo "$image_files"
+}

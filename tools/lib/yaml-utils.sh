@@ -271,27 +271,34 @@ yaml_validate() {
 }
 
 # Extract hermetic conversion candidates
+# Usage: find_hermetic_candidates [--include-ci] <versions...>
 find_hermetic_candidates() {
-    local versions=("$@")
+    local include_ci=false
+    local versions=()
+    
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --include-ci)
+                include_ci=true
+                shift
+                ;;
+            *)
+                versions+=("$1")
+                shift
+                ;;
+        esac
+    done
     
     if [[ ${#versions[@]} -eq 0 ]]; then
         read -ra versions <<< "$ACTIVE_VERSIONS"
     fi
     
-    log_info "Finding images with network_mode: open (hermetic conversion candidates)"
-    
-    yaml_find ".konflux.network_mode" "open" "images/*.yml" "${versions[@]}"
-}
-
-# Check for missing lockfiles in hermetic builds
-check_hermetic_lockfiles() {
-    local versions=("$@")
-    
-    if [[ ${#versions[@]} -eq 0 ]]; then
-        read -ra versions <<< "$ACTIVE_VERSIONS"
+    if [[ "$include_ci" == true ]]; then
+        log_info "Finding images with network_mode: open (including CI images)"
+    else
+        log_info "Finding images with network_mode: open (excluding CI images)"
     fi
-    
-    log_info "Checking for missing cachi2 lockfiles in potential hermetic builds"
     
     for version in "${versions[@]}"; do
         local version_dir
@@ -301,19 +308,97 @@ check_hermetic_lockfiles() {
             continue
         fi
         
-        find "$version_dir/images" -name "*.yml" -type f | while read -r file; do
-            local network_mode
-            network_mode="$(yaml_get "$file" ".konflux.network_mode")"
-            local has_lockfile
-            has_lockfile="$(yaml_has "$file" ".konflux.cachi2.lockfile")"
-            local relative_path="${file#"$version_dir"/}"
-            
-            # If no explicit network_mode, it defaults to hermetic from group.yml
-            if [[ "$network_mode" == "null" || "$network_mode" == "hermetic" ]]; then
-                if ! $has_lockfile; then
-                    echo "$version:$relative_path:missing-lockfile"
+        # Get filtered image files
+        local filter_args=()
+        if [[ "$include_ci" == false ]]; then
+            filter_args+=(--exclude-ci)
+        else
+            filter_args+=(--include-ci)
+        fi
+        filter_args+=(--include-non-payload)  # For hermetic analysis, include all non-CI images
+        
+        local image_files
+        image_files=$(get_image_files "$version_dir" "${filter_args[@]}")
+        
+        if [[ -n "$image_files" ]]; then
+            echo "$image_files" | while read -r file; do
+                local network_mode
+                network_mode="$(yaml_get "$file" ".konflux.network_mode")"
+                
+                if [[ "$network_mode" == "open" ]]; then
+                    local relative_path="${file#"$version_dir"/}"
+                    echo "$version:$relative_path"
                 fi
-            fi
-        done
+            done
+        fi
+    done
+}
+
+# Check for missing lockfiles in hermetic builds
+# Usage: check_hermetic_lockfiles [--include-ci] <versions...>
+check_hermetic_lockfiles() {
+    local include_ci=false
+    local versions=()
+    
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --include-ci)
+                include_ci=true
+                shift
+                ;;
+            *)
+                versions+=("$1")
+                shift
+                ;;
+        esac
+    done
+    
+    if [[ ${#versions[@]} -eq 0 ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
+    fi
+    
+    if [[ "$include_ci" == true ]]; then
+        log_info "Checking for missing cachi2 lockfiles in hermetic builds (including CI images)"
+    else
+        log_info "Checking for missing cachi2 lockfiles in hermetic builds (excluding CI images)"
+    fi
+    
+    for version in "${versions[@]}"; do
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
+        
+        if [[ ! -d "$version_dir" ]]; then
+            continue
+        fi
+        
+        # Get filtered image files
+        local filter_args=()
+        if [[ "$include_ci" == false ]]; then
+            filter_args+=(--exclude-ci)
+        else
+            filter_args+=(--include-ci)
+        fi
+        filter_args+=(--include-non-payload)  # For lockfile analysis, include all non-CI images
+        
+        local image_files
+        image_files=$(get_image_files "$version_dir" "${filter_args[@]}")
+        
+        if [[ -n "$image_files" ]]; then
+            echo "$image_files" | while read -r file; do
+                local network_mode
+                network_mode="$(yaml_get "$file" ".konflux.network_mode")"
+                local has_lockfile
+                has_lockfile="$(yaml_has "$file" ".konflux.cachi2.lockfile")"
+                local relative_path="${file#"$version_dir"/}"
+                
+                # If no explicit network_mode, it defaults to hermetic from group.yml
+                if [[ "$network_mode" == "null" || "$network_mode" == "hermetic" ]]; then
+                    if ! $has_lockfile; then
+                        echo "$version:$relative_path:missing-lockfile"
+                    fi
+                fi
+            done
+        fi
     done
 }

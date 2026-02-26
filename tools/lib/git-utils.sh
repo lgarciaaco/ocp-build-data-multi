@@ -99,7 +99,7 @@ update_worktrees() {
     # Update each worktree
     for version in "${versions[@]}"; do
         local version_dir
-    version_dir="$(get_version_dir "$version")"
+        version_dir="$(get_version_dir "$version")"
         
         if [[ ! -d "$version_dir" ]]; then
             log_warning "Worktree for version $version does not exist, skipping"
@@ -108,7 +108,7 @@ update_worktrees() {
         
         log_info "Updating worktree for version $version"
         (
-            cd "$version_dir" || return || return
+            cd "$version_dir" || return
             local branch_name
             branch_name="$(get_branch_name "$version")"
             
@@ -283,7 +283,7 @@ show_worktree_status() {
     
     for version in "${versions[@]}"; do
         local version_dir
-    version_dir="$(get_version_dir "$version")"
+        version_dir="$(get_version_dir "$version")"
         local status
         status="$(check_worktree_status "$version")"
         local branch=""

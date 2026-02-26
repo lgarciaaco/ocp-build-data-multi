@@ -201,7 +201,8 @@ create_working_directory_with_git() {
     git fetch origin "$target_branch" -q
     
     # Create and checkout migration branch from clean remote state
-    local migration_branch="hermetic-migration-openshift-${target_version}-$(openssl rand -hex 4)"
+    local migration_branch
+    migration_branch="hermetic-migration-openshift-${target_version}-$(openssl rand -hex 4)"
     git checkout -b "$migration_branch" "origin/$target_branch" -q
     
     log_info "Working directory ready with branch: $migration_branch"
