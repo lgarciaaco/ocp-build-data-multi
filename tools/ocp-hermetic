@@ -17,6 +17,7 @@ VERBOSE=false
 DEBUG=false
 OUTPUT_FORMAT="table"
 COMMAND=""
+INCLUDE_CI=false
 
 # Help function
 show_help() {
@@ -37,6 +38,8 @@ COMMANDS:
 
 OPTIONS:
     -f, --format <format>     Output format: table, json, csv (default: table)
+    --include-ci              Include CI images in analysis (default: false)
+    --exclude-ci              Exclude CI images from analysis (default: true)
     -v, --verbose             Enable verbose output
     -d, --debug               Enable debug output
     -h, --help                Show this help message
@@ -45,8 +48,11 @@ EXAMPLES:
     # Show overall hermetic conversion status
     ocp-hermetic status all
 
-    # List conversion candidates for specific versions
+    # List conversion candidates for specific versions (excluding CI images)
     ocp-hermetic candidates 4.19,4.20,4.21
+
+    # List conversion candidates including CI images  
+    ocp-hermetic candidates 4.19,4.20,4.21 --include-ci
 
     # Check which images are missing lockfiles
     ocp-hermetic missing-lockfiles 4.19+
@@ -75,6 +81,14 @@ parse_args() {
             -f|--format)
                 OUTPUT_FORMAT="$2"
                 shift 2
+                ;;
+            --include-ci)
+                INCLUDE_CI=true
+                shift
+                ;;
+            --exclude-ci)
+                INCLUDE_CI=false
+                shift
                 ;;
             -v|--verbose)
                 VERBOSE=true
@@ -136,7 +150,39 @@ status_command() {
 # List conversion candidates
 candidates_command() {
     local args=("$@")
-    local versions_spec="${args[0]:-all}"
+    local versions_spec=""
+    
+    # Parse command-specific arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --include-ci)
+                INCLUDE_CI=true
+                shift
+                ;;
+            --exclude-ci)
+                INCLUDE_CI=false
+                shift
+                ;;
+            -f|--format)
+                OUTPUT_FORMAT="$2"
+                shift 2
+                ;;
+            *)
+                if [[ -z "$versions_spec" ]]; then
+                    versions_spec="$1"
+                else
+                    log_error "Unknown argument: $1"
+                    return 1
+                fi
+                shift
+                ;;
+        esac
+    done
+    
+    # Set default if no version specified
+    if [[ -z "$versions_spec" ]]; then
+        versions_spec="all"
+    fi
     
     if [[ "$versions_spec" == "all" ]]; then
         read -ra versions <<< "$ACTIVE_VERSIONS"
@@ -146,7 +192,11 @@ candidates_command() {
     
     # Only show info message if not being called by other tools
     if [[ "${BASH_SOURCE[1]}" != *"ocp-migrate"* ]]; then
-        log_info "Hermetic conversion candidates across versions: ${versions[*]}"
+        if [[ "$INCLUDE_CI" == true ]]; then
+            log_info "Hermetic conversion candidates across versions (including CI images): ${versions[*]}"
+        else
+            log_info "Hermetic conversion candidates across versions (excluding CI images): ${versions[*]}"
+        fi
         echo
     fi
     
@@ -209,7 +259,11 @@ missing_lockfiles_command() {
         readarray -t versions < <(parse_version_range "$versions_spec")
     fi
     
-    log_info "Images missing cachi2 lockfiles across versions: ${versions[*]}"
+    if [[ "$INCLUDE_CI" == true ]]; then
+        log_info "Images missing cachi2 lockfiles across versions (including CI images): ${versions[*]}"
+    else
+        log_info "Images missing cachi2 lockfiles across versions (excluding CI images): ${versions[*]}"
+    fi
     echo
     
     case "$OUTPUT_FORMAT" in
@@ -368,13 +422,36 @@ report_command() {
             [[ "$mode" != "null" ]] && default_mode="$mode"
         fi
         
-        # Count images
+        # Count images (use filtering)
         local image_count=0
         local open_count=0
         
         if [[ -d "$version_dir/images" ]]; then
-            image_count="$(find "$version_dir/images" -name "*.yml" -type f | wc -l | xargs)"
-            open_count="$(find "$version_dir/images" -name "*.yml" -type f -exec grep -l "network_mode: open" {} \; 2>/dev/null | wc -l | xargs)"
+            # Get filtered image files
+            local filter_args=()
+            if [[ "$INCLUDE_CI" == false ]]; then
+                filter_args+=(--exclude-ci)
+            else
+                filter_args+=(--include-ci)
+            fi
+            filter_args+=(--include-non-payload)
+            
+            local image_files
+            image_files=$(get_image_files "$version_dir" "${filter_args[@]}")
+            
+            if [[ -n "$image_files" ]]; then
+                image_count=$(echo "$image_files" | wc -l | xargs)
+                
+                # Count open images
+                open_count=0
+                while read -r file; do
+                    local mode
+                    mode="$(yaml_get "$file" ".konflux.network_mode")"
+                    if [[ "$mode" == "open" ]]; then
+                        ((open_count++))
+                    fi
+                done <<< "$image_files"
+            fi
         fi
         
         local hermetic_ready="Yes"
@@ -407,17 +484,33 @@ report_command() {
         version_dir="$(get_version_dir "$version")"
         
         if [[ -d "$version_dir/images" ]]; then
-            find "$version_dir/images" -name "*.yml" -type f | while read -r file; do
-                if yaml_has "$file" ".konflux.network_mode"; then
-                    local mode
-                    mode="$(yaml_get "$file" ".konflux.network_mode")"
-                    if [[ "$mode" == "open" ]]; then
-                        local filename
-                        filename="$(basename "$file" .yml)"
-                        echo "$filename"
+            # Get filtered image files
+            local filter_args=()
+            if [[ "$INCLUDE_CI" == false ]]; then
+                filter_args+=(--exclude-ci)
+            else
+                filter_args+=(--include-ci)
+            fi
+            filter_args+=(--include-non-payload)
+            
+            local image_files
+            image_files=$(get_image_files "$version_dir" "${filter_args[@]}")
+            
+            if [[ -n "$image_files" ]]; then
+                echo "$image_files" | while read -r file; do
+                    if yaml_has "$file" ".konflux.network_mode"; then
+                        local mode
+                        mode="$(yaml_get "$file" ".konflux.network_mode")"
+                        if [[ "$mode" == "open" ]]; then
+                            local filename
+                            filename="$(basename "$file" .yml)"
+                            echo "$filename"
+                        fi
                     fi
-                fi
-            done > "$temp_dir/open_$version"
+                done > "$temp_dir/open_$version"
+            else
+                touch "$temp_dir/open_$version"
+            fi
         else
             touch "$temp_dir/open_$version"
         fi
@@ -478,19 +571,33 @@ report_command() {
         version_dir="$(get_version_dir "$version")"
         
         if [[ -d "$version_dir/images" ]]; then
-            find "$version_dir/images" -name "*.yml" -type f | while read -r file; do
-                local network_mode
-                network_mode="$(yaml_get "$file" ".konflux.network_mode")"
-                local has_lockfile
-                has_lockfile="$(yaml_has "$file" ".konflux.cachi2.lockfile")"
-                
-                # If no explicit network_mode, it defaults to hermetic
-                if [[ "$network_mode" == "null" || "$network_mode" == "hermetic" ]]; then
-                    if ! $has_lockfile; then
-                        ((missing_lockfiles++))
+            # Get filtered image files
+            local filter_args=()
+            if [[ "$INCLUDE_CI" == false ]]; then
+                filter_args+=(--exclude-ci)
+            else
+                filter_args+=(--include-ci)
+            fi
+            filter_args+=(--include-non-payload)
+            
+            local image_files
+            image_files=$(get_image_files "$version_dir" "${filter_args[@]}")
+            
+            if [[ -n "$image_files" ]]; then
+                echo "$image_files" | while read -r file; do
+                    local network_mode
+                    network_mode="$(yaml_get "$file" ".konflux.network_mode")"
+                    local has_lockfile
+                    has_lockfile="$(yaml_has "$file" ".konflux.cachi2.lockfile")"
+                    
+                    # If no explicit network_mode, it defaults to hermetic
+                    if [[ "$network_mode" == "null" || "$network_mode" == "hermetic" ]]; then
+                        if ! $has_lockfile; then
+                            ((missing_lockfiles++))
+                        fi
                     fi
-                fi
-            done
+                done
+            fi
         fi
     done
     
@@ -531,10 +638,34 @@ progress_command() {
             continue
         fi
         
-        local total_images
-        total_images="$(find "$version_dir/images" -name "*.yml" -type f | wc -l | xargs)"
-        local open_images
-        open_images="$(find "$version_dir/images" -name "*.yml" -type f -exec grep -l "network_mode: open" {} \; 2>/dev/null | wc -l | xargs)"
+        # Get filtered image files
+        local filter_args=()
+        if [[ "$INCLUDE_CI" == false ]]; then
+            filter_args+=(--exclude-ci)
+        else
+            filter_args+=(--include-ci)
+        fi
+        filter_args+=(--include-non-payload)
+        
+        local image_files
+        image_files=$(get_image_files "$version_dir" "${filter_args[@]}")
+        
+        local total_images=0
+        local open_images=0
+        
+        if [[ -n "$image_files" ]]; then
+            total_images=$(echo "$image_files" | wc -l | xargs)
+            
+            # Count open images
+            open_images=0
+            while read -r file; do
+                local mode
+                mode="$(yaml_get "$file" ".konflux.network_mode")"
+                if [[ "$mode" == "open" ]]; then
+                    ((open_images++))
+                fi
+            done <<< "$image_files"
+        fi
         local hermetic_images=$((total_images - open_images))
         local progress_pct=0
         
@@ -602,13 +733,36 @@ show_status_table() {
             [[ "$mode" != "null" ]] && default_mode="$mode"
         fi
         
-        # Count images
+        # Count images (use filtering)
         local total_count=0
         local open_count=0
         
         if [[ -d "$version_dir/images" ]]; then
-            total_count="$(find "$version_dir/images" -name "*.yml" -type f | wc -l | xargs)"
-            open_count="$(find "$version_dir/images" -name "*.yml" -type f -exec grep -l "network_mode: open" {} \; 2>/dev/null | wc -l | xargs)"
+            # Get filtered image files
+            local filter_args=()
+            if [[ "$INCLUDE_CI" == false ]]; then
+                filter_args+=(--exclude-ci)
+            else
+                filter_args+=(--include-ci)
+            fi
+            filter_args+=(--include-non-payload)
+            
+            local image_files
+            image_files=$(get_image_files "$version_dir" "${filter_args[@]}")
+            
+            if [[ -n "$image_files" ]]; then
+                total_count=$(echo "$image_files" | wc -l | xargs)
+                
+                # Count open images
+                open_count=0
+                while read -r file; do
+                    local mode
+                    mode="$(yaml_get "$file" ".konflux.network_mode")"
+                    if [[ "$mode" == "open" ]]; then
+                        ((open_count++))
+                    fi
+                done <<< "$image_files"
+            fi
         fi
         
         local status="Ready"
@@ -649,13 +803,36 @@ show_status_json() {
                 [[ "$mode" != "null" ]] && default_mode="$mode"
             fi
             
-            # Count images
+            # Count images (use filtering)
             local total_count=0
             local open_count=0
             
             if [[ -d "$version_dir/images" ]]; then
-                total_count="$(find "$version_dir/images" -name "*.yml" -type f | wc -l | xargs)"
-                open_count="$(find "$version_dir/images" -name "*.yml" -type f -exec grep -l "network_mode: open" {} \; 2>/dev/null | wc -l | xargs)"
+                # Get filtered image files
+                local filter_args=()
+                if [[ "$INCLUDE_CI" == false ]]; then
+                    filter_args+=(--exclude-ci)
+                else
+                    filter_args+=(--include-ci)
+                fi
+                filter_args+=(--include-non-payload)
+                
+                local image_files
+                image_files=$(get_image_files "$version_dir" "${filter_args[@]}")
+                
+                if [[ -n "$image_files" ]]; then
+                    total_count=$(echo "$image_files" | wc -l | xargs)
+                    
+                    # Count open images
+                    open_count=0
+                    while read -r file; do
+                        local mode
+                        mode="$(yaml_get "$file" ".konflux.network_mode")"
+                        if [[ "$mode" == "open" ]]; then
+                            ((open_count++))
+                        fi
+                    done <<< "$image_files"
+                fi
             fi
             
             echo "      \"default_mode\": \"$default_mode\","
@@ -695,13 +872,36 @@ show_status_csv() {
             [[ "$mode" != "null" ]] && default_mode="$mode"
         fi
         
-        # Count images
+        # Count images (use filtering)
         local total_count=0
         local open_count=0
         
         if [[ -d "$version_dir/images" ]]; then
-            total_count="$(find "$version_dir/images" -name "*.yml" -type f | wc -l | xargs)"
-            open_count="$(find "$version_dir/images" -name "*.yml" -type f -exec grep -l "network_mode: open" {} \; 2>/dev/null | wc -l | xargs)"
+            # Get filtered image files
+            local filter_args=()
+            if [[ "$INCLUDE_CI" == false ]]; then
+                filter_args+=(--exclude-ci)
+            else
+                filter_args+=(--include-ci)
+            fi
+            filter_args+=(--include-non-payload)
+            
+            local image_files
+            image_files=$(get_image_files "$version_dir" "${filter_args[@]}")
+            
+            if [[ -n "$image_files" ]]; then
+                total_count=$(echo "$image_files" | wc -l | xargs)
+                
+                # Count open images
+                open_count=0
+                while read -r file; do
+                    local mode
+                    mode="$(yaml_get "$file" ".konflux.network_mode")"
+                    if [[ "$mode" == "open" ]]; then
+                        ((open_count++))
+                    fi
+                done <<< "$image_files"
+            fi
         fi
         
         local hermetic_count=$((total_count - open_count))
@@ -725,25 +925,42 @@ show_candidates_table() {
         version_dir="$(get_version_dir "$version")"
         
         if [[ -d "$version_dir/images" ]]; then
-            # Track all existing images
-            find "$version_dir/images" -name "*.yml" -type f | while read -r file; do
-                local filename
-                filename="$(basename "$file" .yml)"
-                echo "$filename"
-            done > "$temp_dir/all_$version"
+            # Get filtered image files
+            local filter_args=()
+            if [[ "$INCLUDE_CI" == false ]]; then
+                filter_args+=(--exclude-ci)
+            else
+                filter_args+=(--include-ci)
+            fi
+            filter_args+=(--include-non-payload)
             
-            # Track images with network_mode: open
-            find "$version_dir/images" -name "*.yml" -type f | while read -r file; do
-                if yaml_has "$file" ".konflux.network_mode"; then
-                    local mode
-                    mode="$(yaml_get "$file" ".konflux.network_mode")"
-                    if [[ "$mode" == "open" ]]; then
-                        local filename
-                        filename="$(basename "$file" .yml)"
-                        echo "$filename"
+            local all_images
+            all_images=$(get_image_files "$version_dir" "${filter_args[@]}")
+            
+            # Track all existing images
+            if [[ -n "$all_images" ]]; then
+                echo "$all_images" | while read -r file; do
+                    local filename
+                    filename="$(basename "$file" .yml)"
+                    echo "$filename"
+                done > "$temp_dir/all_$version"
+                
+                # Track images with network_mode: open
+                echo "$all_images" | while read -r file; do
+                    if yaml_has "$file" ".konflux.network_mode"; then
+                        local mode
+                        mode="$(yaml_get "$file" ".konflux.network_mode")"
+                        if [[ "$mode" == "open" ]]; then
+                            local filename
+                            filename="$(basename "$file" .yml)"
+                            echo "$filename"
+                        fi
                     fi
-                fi
-            done > "$temp_dir/open_$version"
+                done > "$temp_dir/open_$version"
+            else
+                touch "$temp_dir/all_$version"
+                touch "$temp_dir/open_$version"
+            fi
         else
             touch "$temp_dir/all_$version"
             touch "$temp_dir/open_$version"
@@ -869,21 +1086,37 @@ show_missing_lockfiles_table() {
         version_dir="$(get_version_dir "$version")"
         
         if [[ -d "$version_dir/images" ]]; then
-            find "$version_dir/images" -name "*.yml" -type f | while read -r file; do
-                local network_mode
-                network_mode="$(yaml_get "$file" ".konflux.network_mode")"
-                local has_lockfile
-                has_lockfile="$(yaml_has "$file" ".konflux.cachi2.lockfile")"
-                
-                # If no explicit network_mode, it defaults to hermetic
-                if [[ "$network_mode" == "null" || "$network_mode" == "hermetic" ]]; then
-                    if ! $has_lockfile; then
-                        local filename
-                        filename="$(basename "$file" .yml)"
-                        echo "$filename"
+            # Get filtered image files
+            local filter_args=()
+            if [[ "$INCLUDE_CI" == false ]]; then
+                filter_args+=(--exclude-ci)
+            else
+                filter_args+=(--include-ci)
+            fi
+            filter_args+=(--include-non-payload)
+            
+            local image_files
+            image_files=$(get_image_files "$version_dir" "${filter_args[@]}")
+            
+            if [[ -n "$image_files" ]]; then
+                echo "$image_files" | while read -r file; do
+                    local network_mode
+                    network_mode="$(yaml_get "$file" ".konflux.network_mode")"
+                    local has_lockfile
+                    has_lockfile="$(yaml_has "$file" ".konflux.cachi2.lockfile")"
+                    
+                    # If no explicit network_mode, it defaults to hermetic
+                    if [[ "$network_mode" == "null" || "$network_mode" == "hermetic" ]]; then
+                        if ! $has_lockfile; then
+                            local filename
+                            filename="$(basename "$file" .yml)"
+                            echo "$filename"
+                        fi
                     fi
-                fi
-            done > "$temp_dir/missing_$version"
+                done > "$temp_dir/missing_$version"
+            else
+                touch "$temp_dir/missing_$version"
+            fi
         else
             touch "$temp_dir/missing_$version"
         fi

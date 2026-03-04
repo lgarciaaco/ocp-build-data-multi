@@ -169,20 +169,54 @@ init_worktrees() {
 update_worktrees_command() {
     local versions=("$@")
     
-    # Check if main repository exists
-    local parent_dir
-    parent_dir="$(dirname "$MULTI_DIR")"
-    local repo_dir="$parent_dir/ocp-build-data"
-    
-    if [[ ! -d "$repo_dir" ]]; then
-        log_error "Main repository not found. Run 'ocp-setup clone' first"
-        return 1
+    if [[ ${#versions[@]} -eq 0 ]]; then
+        read -ra versions <<< "$ACTIVE_VERSIONS"
     fi
     
-    # Change to the main repository directory
-    cd "$repo_dir"
+    log_info "Updating worktrees for versions: ${versions[*]}"
     
-    update_worktrees "${versions[@]}"
+    # Update each worktree directly
+    for version in "${versions[@]}"; do
+        local version_dir
+        version_dir="$(get_version_dir "$version")"
+        
+        if [[ ! -d "$version_dir" ]]; then
+            log_warning "Worktree for version $version does not exist, skipping"
+            continue
+        fi
+        
+        log_info "Updating worktree for version $version"
+        (
+            cd "$version_dir" || return
+            
+            # Ensure correct remotes are configured
+            if ! git remote | grep -q "^${UPSTREAM_REMOTE}$"; then
+                log_info "Adding upstream remote to worktree for version $version"
+                git remote add "$UPSTREAM_REMOTE" "$UPSTREAM_URL"
+            fi
+            
+            # Update remote URL if needed
+            local current_url
+            current_url="$(git remote get-url "$UPSTREAM_REMOTE" 2>/dev/null || echo "")"
+            if [[ "$current_url" != "$UPSTREAM_URL" ]]; then
+                log_info "Fixing upstream remote URL for version $version"
+                git remote set-url "$UPSTREAM_REMOTE" "$UPSTREAM_URL"
+            fi
+            
+            # Fetch latest changes
+            git fetch "$UPSTREAM_REMOTE"
+            
+            local branch_name
+            branch_name="$(get_branch_name "$version")"
+            
+            # Pull latest changes
+            if git pull "$UPSTREAM_REMOTE" "$branch_name" --ff-only; then
+                log_success "Updated worktree for version $version"
+            else
+                log_warning "Failed to update worktree for version $version (may have local changes)"
+            fi
+        )
+    done
 }
 
 # Show status of worktrees

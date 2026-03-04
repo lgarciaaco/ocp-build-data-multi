@@ -21,7 +21,7 @@ owners:
   subcomponent: "cluster-monitoring-operator"
 # Complex konflux configuration for testing edge cases
 konflux:
-  network_mode: open  # Candidate for conversion
+  network_mode: open # Candidate for conversion
   cachi2:
     enabled: true
     gomod_version_patch: true
