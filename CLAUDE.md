@@ -103,6 +103,9 @@ All builds support: x86_64, aarch64, ppc64le, s390x
 # Check current hermetic status
 ./tools/ocp-hermetic status 4.19+
 
+# Find all non-hermetic images (network_mode: open or cachi2.enabled: false, excluding disabled and ci-openshift)
+find versions -name "*.yml" -path "*/images/*" ! -name "ci-openshift-*" -exec sh -c 'f="$1"; yq -e "select(.mode != \"disabled\" and (.konflux.network_mode == \"open\" or .konflux.cachi2.enabled == false))" "$f" >/dev/null 2>&1 && echo "$f: network_mode=$(yq ".konflux.network_mode // \"hermetic\"" "$f"), cachi2.enabled=$(yq ".konflux.cachi2.enabled" "$f")"' _ {} \;
+
 # Detect images needing migration from current to older versions
 ./tools/ocp-migrate detect 4.22 4.19,4.20,4.21
 
